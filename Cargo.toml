@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "engine-core",
+    "engine-quant",
+    "engine-io",
+    "engine-adapters/deepseek-moe",
+    "engine-bench",
+    "engine-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/mohitmishra786/undertow"
+authors = ["Mohit Mishra <immadmohit@gmail.com>"]
+
+[workspace.dependencies]
+engine-core = { path = "engine-core" }
+engine-quant = { path = "engine-quant" }
+engine-io = { path = "engine-io" }
+deepseek-moe = { path = "engine-adapters/deepseek-moe" }
+engine-bench = { path = "engine-bench" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+half = "2"
+
+[profile.release]
+debug = true
+
+# Oracle tests do full float forward passes; unoptimized debug builds make
+# them needlessly slow.
+[profile.test]
+opt-level = 2

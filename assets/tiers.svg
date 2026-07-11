@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 335" font-family="Helvetica, Arial, sans-serif" role="img" aria-label="Tiered storage design">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <style>
+    .tier { fill: rgba(51,154,240,0.06); stroke: #339af0; stroke-width: 1.5; }
+    .inner { fill: rgba(100,116,139,0.10); stroke: #64748b; stroke-width: 1.2; }
+    .title { fill: #339af0; font-size: 15px; font-weight: bold; }
+    .label { fill: #64748b; font-size: 12px; }
+    .mono  { font-family: Menlo, 'Courier New', monospace; }
+    .edge  { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#arr); }
+    .hint  { stroke-dasharray: 5 4; }
+  </style>
+
+  <!-- disk tier -->
+  <rect class="tier" x="20" y="40" width="200" height="200" rx="10"/>
+  <text class="title" x="40" y="68">Disk</text>
+  <text class="label" x="40" y="88">routed expert pool</text>
+  <text class="label" x="40" y="104">350 to 600 GB, quantized</text>
+  <rect class="inner" x="40" y="124" width="160" height="40" rx="6"/>
+  <text class="label mono" x="52" y="148">expert shards</text>
+  <text class="label" x="40" y="192">read with pread,</text>
+  <text class="label" x="40" y="208">never mmap</text>
+
+  <!-- ram tier -->
+  <rect class="tier" x="290" y="40" width="220" height="200" rx="10"/>
+  <text class="title" x="310" y="68">RAM</text>
+  <text class="label" x="310" y="88">sized once at startup</text>
+  <rect class="inner" x="310" y="104" width="180" height="40" rx="6"/>
+  <text class="label mono" x="322" y="128">ExpertCache</text>
+  <rect class="inner" x="310" y="154" width="180" height="40" rx="6"/>
+  <text class="label mono" x="322" y="178">dense + shared weights</text>
+  <rect class="inner" x="310" y="204" width="180" height="26" rx="6"/>
+  <text class="label mono" x="322" y="222">compressed KV cache</text>
+
+  <!-- compute -->
+  <rect class="tier" x="580" y="40" width="160" height="200" rx="10"/>
+  <text class="title" x="600" y="68">Compute</text>
+  <text class="label" x="600" y="88">forward pass</text>
+  <rect class="inner" x="600" y="104" width="120" height="40" rx="6"/>
+  <text class="label mono" x="612" y="128">router</text>
+  <rect class="inner" x="600" y="154" width="120" height="40" rx="6"/>
+  <text class="label mono" x="612" y="178">MLA + MoE</text>
+
+  <!-- edges -->
+  <path class="edge" d="M220 124 C 250 124, 260 124, 284 124"/>
+  <text class="label" x="228" y="114">miss</text>
+  <path class="edge" d="M510 140 C 545 140, 550 140, 574 140"/>
+  <path class="edge hint" d="M640 245 C 570 272, 340 276, 190 250"/>
+  <text class="label" x="410" y="290">prefetch hint (speculative, non-binding)</text>
+
+  <text class="label mono" x="70" y="318">served through TieredStore::get_expert(layer, id)</text>
+  <path class="edge" d="M64 313 C 40 305, 30 280, 40 248"/>
+</svg>

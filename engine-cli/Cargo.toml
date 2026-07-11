@@ -1,0 +1,19 @@
+[package]
+name = "engine-cli"
+description = "CLI: convert / run / chat / bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "undertow"
+path = "src/main.rs"
+
+[dependencies]
+engine-core.workspace = true
+engine-bench.workspace = true
+deepseek-moe.workspace = true
+anyhow.workspace = true
+clap.workspace = true

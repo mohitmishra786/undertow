@@ -1,0 +1,10 @@
+[package]
+name = "engine-quant"
+description = "Matmul kernels: scalar f32 reference now, int8/int4 dequant-on-use + SIMD later"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

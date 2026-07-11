@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+.DS_Store
+# generated oracle model dirs (regenerated deterministically by engine-bench)
+/oracle-out/
+__pycache__/
+*.pyc

@@ -1,0 +1,11 @@
+[package]
+name = "engine-core"
+description = "Architecture-agnostic runtime: adapter traits, tiered store, expert cache, scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true

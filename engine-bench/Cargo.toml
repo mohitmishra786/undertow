@@ -1,0 +1,19 @@
+[package]
+name = "engine-bench"
+description = "Synthetic oracle MoE model generator + correctness harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+engine-core.workspace = true
+engine-io.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+deepseek-moe.workspace = true
+engine-quant.workspace = true
+tempfile = "3"
