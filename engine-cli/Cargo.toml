@@ -13,7 +13,15 @@ path = "src/main.rs"
 
 [dependencies]
 engine-core.workspace = true
+engine-convert.workspace = true
+engine-tokenizer.workspace = true
+engine-server.workspace = true
 engine-bench.workspace = true
 deepseek-moe.workspace = true
+mixtral-moe.workspace = true
+qwen-moe.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

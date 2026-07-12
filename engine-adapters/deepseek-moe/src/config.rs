@@ -16,6 +16,9 @@ fn default_scale() -> f32 {
 fn default_eps() -> f32 {
     1e-6
 }
+fn default_max_pos() -> usize {
+    4096
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RopeParameters {
@@ -65,6 +68,27 @@ pub struct DeepseekConfig {
     pub rope_parameters: Option<RopeParameters>,
     #[serde(default)]
     pub tie_word_embeddings: bool,
+    #[serde(default = "default_max_pos")]
+    pub max_position_embeddings: usize,
+    /// Extra MTP layer count after the main stack (0 or 1 supported).
+    #[serde(default)]
+    pub num_nextn_predict_layers: usize,
+    /// Number or array in checkpoints; parsed via [`Self::eos_ids`].
+    #[serde(default)]
+    pub eos_token_id: Option<serde_json::Value>,
+}
+
+/// Extract stop-token ids from an `eos_token_id` json value (number or
+/// array of numbers; anything else yields none).
+pub fn parse_eos_ids(v: &serde_json::Value) -> Vec<usize> {
+    match v {
+        serde_json::Value::Number(n) => n.as_u64().map(|x| x as usize).into_iter().collect(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x.as_u64().map(|u| u as usize))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 impl DeepseekConfig {
@@ -92,6 +116,14 @@ impl DeepseekConfig {
         1.0 / (self.qk_head_dim() as f32).sqrt()
     }
 
+    /// Stop tokens declared in config.json.
+    pub fn eos_ids(&self) -> Vec<usize> {
+        self.eos_token_id
+            .as_ref()
+            .map(parse_eos_ids)
+            .unwrap_or_default()
+    }
+
     pub fn validate(&self) -> Result<()> {
         macro_rules! ck {
             ($name:literal, $v:expr, $lo:expr, $hi:expr) => {
@@ -104,6 +136,12 @@ impl DeepseekConfig {
             };
         }
         ck!("hidden_size", self.hidden_size, 1, 1 << 20);
+        ck!(
+            "max_position_embeddings",
+            self.max_position_embeddings,
+            1,
+            1 << 27
+        );
         ck!("vocab_size", self.vocab_size, 1, 1 << 24);
         ck!("num_hidden_layers", self.num_hidden_layers, 1, 256);
         ck!("num_attention_heads", self.num_attention_heads, 1, 1024);

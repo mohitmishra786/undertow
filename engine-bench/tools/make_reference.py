@@ -39,10 +39,12 @@ def main() -> None:
         model_dir, config=cfg, torch_dtype=torch.float32
     ).eval()
 
-    # The engine assumes the interleaved-RoPE MLA formulation; fail loudly if
-    # this transformers version resolved the config differently.
-    interleave = getattr(model.config, "rope_interleave", None)
-    assert interleave is not False, f"expected interleaved rope, got {interleave!r}"
+    # The engine assumes the interleaved-RoPE MLA formulation for the
+    # DeepSeek family; fail loudly if this transformers version resolved
+    # the config differently.
+    if model.config.model_type == "deepseek_v3":
+        interleave = getattr(model.config, "rope_interleave", None)
+        assert interleave is not False, f"expected interleaved rope, got {interleave!r}"
 
     ids = torch.tensor([PROMPT_IDS])
     with torch.no_grad():

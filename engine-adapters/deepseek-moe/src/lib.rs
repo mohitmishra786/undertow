@@ -14,11 +14,16 @@ pub mod attention;
 pub mod config;
 pub mod loader;
 pub mod model;
+pub mod mtp;
+pub mod naming;
 pub mod router;
 
 mod adapter;
 
 pub use adapter::DeepseekMoeAdapter;
 pub use config::DeepseekConfig;
-pub use model::DeepseekMoeModel;
+pub use loader::{LoadOptions, StoreChoice};
+pub use model::{DeepseekMoeModel, InferenceSession};
+pub use mtp::{generate_greedy_mtp, speculative_loop, MtpHead, MtpStats};
+pub use naming::{classify_tensor, DeepseekExpertNaming};
 pub use router::DeepseekSigmoidRouter;

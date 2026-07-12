@@ -1,4 +1,5 @@
-//! safetensors I/O with positioned reads (`pread`), never `mmap`.
+//! safetensors I/O with positioned reads (`pread`), never `mmap`, plus the
+//! disk-backed expert store.
 //!
 //! Why no mmap: with a 350–600GB expert pool behind a small RAM budget,
 //! mmap hands residency control to the page cache and makes RSS unpredictable
@@ -11,7 +12,11 @@
 //! never contend on a shared file cursor.
 
 mod reader;
+mod store;
 mod writer;
 
-pub use reader::{Dtype, SafetensorsReader, ShardedModelReader, TensorInfo};
-pub use writer::write_safetensors;
+pub use reader::{read_qtensor, Dtype, SafetensorsReader, ShardedModelReader, TensorInfo};
+pub use store::{DiskExpertStore, ExpertDims};
+pub use writer::{
+    write_safetensors, write_safetensors_entries, PlannedEntry, ShardWriter, TensorEntry,
+};

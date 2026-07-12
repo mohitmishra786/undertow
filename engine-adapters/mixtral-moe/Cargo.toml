@@ -1,0 +1,15 @@
+[package]
+name = "mixtral-moe"
+description = "ModelAdapter for the Mixtral family: softmax top-k router + GQA attention"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+engine-core.workspace = true
+moe-common.workspace = true
+engine-convert.workspace = true
+serde.workspace = true
+serde_json.workspace = true

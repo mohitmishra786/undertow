@@ -1,0 +1,16 @@
+[package]
+name = "engine-convert"
+description = "Streaming, resumable HF checkpoint to quantized undertow checkpoint converter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+engine-core.workspace = true
+engine-io.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

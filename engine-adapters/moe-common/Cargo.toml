@@ -1,0 +1,14 @@
+[package]
+name = "moe-common"
+description = "Shared machinery for GQA-attention MoE families (Mixtral, Qwen-MoE)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+engine-core.workspace = true
+engine-quant.workspace = true
+engine-io.workspace = true
+serde_json.workspace = true

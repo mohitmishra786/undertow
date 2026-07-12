@@ -1,49 +1,57 @@
-//! Scalar reference forward pass for the DeepSeek-MoE family.
+//! DeepSeek-MoE family model: weights, forward pass, inference sessions.
 //!
-//! Full-sequence, causal, no KV cache: `forward` recomputes attention over
-//! the whole sequence, and `greedy_decode` re-runs `forward` per emitted
-//! token. Quadratic and proud of it — this path exists to be *obviously
-//! correct* for oracle validation, not fast. Incremental decode with the
-//! compressed-KV cache is Phase 1.
+//! Weights are [`QTensor`]s throughout, so the same code runs a plain f32
+//! oracle checkpoint and a converted int8/int4 one. Numerically sensitive
+//! pieces (norms, router gate, correction bias) are always f32.
 //!
-//! Routed-expert weights are only reachable through the [`TieredStore`]
-//! trait object, even though the phase-0 store is RAM-resident: the MoE
-//! block below is already written against the streaming boundary.
+//! Routed experts are only reachable through [`TieredStore`]; on a
+//! converted checkpoint that is the disk-streaming store, on an f32
+//! oracle a RAM-resident one. During single-token decode the router of
+//! layer L+1 is speculatively evaluated on layer L's post-attention state
+//! and its top-k experts prefetched — a pure I/O hint that never affects
+//! output (measured recall of this predictor on GLM-5.2 class models is
+//! high enough to hide most of the expert-fetch latency behind compute).
 
 use std::sync::Arc;
 
 use engine_core::adapter::RouterAdapter;
-use engine_core::{ExpertKey, Tensor, TieredStore};
+use engine_core::{EngineError, ExpertKey, QTensor, Tensor, TieredStore};
 use engine_quant::{matmul, rmsnorm, silu};
 
-use crate::attention::{mla_forward, MlaDims, MlaWeights};
+use crate::attention::{mla_forward_cached, AttnPath, LayerKvCache, MlaDims, MlaWeights};
 use crate::config::DeepseekConfig;
 use crate::router::DeepseekSigmoidRouter;
+
+pub use engine_core::sample::argmax;
 
 /// Plain SwiGLU MLP weights (dense layers, shared experts).
 pub struct MlpWeights {
     /// `[inter, hidden]`
-    pub gate_proj: Tensor,
+    pub gate_proj: QTensor,
     /// `[inter, hidden]`
-    pub up_proj: Tensor,
+    pub up_proj: QTensor,
     /// `[hidden, inter]`
-    pub down_proj: Tensor,
+    pub down_proj: QTensor,
 }
 
 impl MlpWeights {
-    /// `out[s] = down( silu(gate(x[s])) * up(x[s]) )`, accumulated into `out`.
+    pub fn nbytes(&self) -> usize {
+        self.gate_proj.nbytes() + self.up_proj.nbytes() + self.down_proj.nbytes()
+    }
+
+    /// `out[s] += down( silu(gate(x[s])) * up(x[s]) )`.
     fn forward_add(&self, x: &[f32], seq: usize, out: &mut [f32]) {
-        let hidden = self.gate_proj.dim1();
-        let inter = self.gate_proj.dim0();
+        let hidden = self.gate_proj.in_dim();
+        let inter = self.gate_proj.out_dim();
         let mut g = vec![0.0f32; seq * inter];
         let mut u = vec![0.0f32; seq * inter];
-        matmul(&mut g, x, &self.gate_proj.data, seq, hidden, inter);
-        matmul(&mut u, x, &self.up_proj.data, seq, hidden, inter);
+        self.gate_proj.matmul(&mut g, x, seq);
+        self.up_proj.matmul(&mut u, x, seq);
         for (gv, uv) in g.iter_mut().zip(&u) {
             *gv = silu(*gv) * uv;
         }
         let mut d = vec![0.0f32; seq * hidden];
-        matmul(&mut d, &g, &self.down_proj.data, seq, inter, hidden);
+        self.down_proj.matmul(&mut d, &g, seq);
         for (o, v) in out.iter_mut().zip(&d) {
             *o += v;
         }
@@ -74,17 +82,23 @@ pub struct LayerWeights {
 pub struct DeepseekMoeModel {
     pub cfg: DeepseekConfig,
     /// `[vocab, hidden]`
-    pub embed_tokens: Tensor,
+    pub embed_tokens: QTensor,
     pub layers: Vec<LayerWeights>,
     pub final_norm: Vec<f32>,
     /// `[vocab, hidden]`
-    pub lm_head: Tensor,
+    pub lm_head: QTensor,
     pub router: DeepseekSigmoidRouter,
     pub store: Arc<dyn TieredStore>,
+    /// Stop-token ids from config.json / generation_config.json.
+    pub stop_ids: Vec<usize>,
+    /// Bytes of RAM-resident dense weights (cache budgeting, stats).
+    pub dense_bytes: usize,
+    /// Native multi-token-prediction head, when the checkpoint ships one.
+    pub mtp: Option<crate::mtp::MtpHead>,
 }
 
 impl DeepseekMoeModel {
-    fn mla_dims(&self) -> MlaDims {
+    pub fn mla_dims(&self) -> MlaDims {
         let c = &self.cfg;
         MlaDims {
             hidden: c.hidden_size,
@@ -99,9 +113,74 @@ impl DeepseekMoeModel {
         }
     }
 
-    /// MoE block: route each position, pull experts through the tiered
-    /// store, accumulate weighted outputs + shared expert. `x` is already
-    /// post-attention-layernormed; result is accumulated into `out`.
+    pub(crate) fn embed_row(&self, id: usize, out: &mut [f32]) {
+        out.iter_mut().for_each(|v| *v = 0.0);
+        self.embed_tokens.add_scaled_row(id, 1.0, out);
+    }
+
+    /// Run one transformer layer in place over `x` `[seq, hidden]`.
+    /// `layer_idx` addresses this layer's experts in the store (the MTP
+    /// layer lives at index `num_hidden_layers`).
+    pub(crate) fn run_layer(
+        &self,
+        layer: &LayerWeights,
+        layer_idx: usize,
+        x: &mut [f32],
+        seq: usize,
+        kv: &mut LayerKvCache,
+        path: AttnPath,
+    ) -> engine_core::Result<()> {
+        let c = &self.cfg;
+        let hidden = c.hidden_size;
+        let dims = self.mla_dims();
+        let mut normed = vec![0.0f32; seq * hidden];
+        for i in 0..seq {
+            rmsnorm(
+                &mut normed[i * hidden..(i + 1) * hidden],
+                &x[i * hidden..(i + 1) * hidden],
+                &layer.input_norm,
+                c.rms_norm_eps,
+            );
+        }
+        let attn_out = mla_forward_cached(&dims, &layer.attn, &normed, seq, kv, path);
+        for (xv, av) in x.iter_mut().zip(&attn_out) {
+            *xv += av;
+        }
+        for i in 0..seq {
+            rmsnorm(
+                &mut normed[i * hidden..(i + 1) * hidden],
+                &x[i * hidden..(i + 1) * hidden],
+                &layer.post_attn_norm,
+                c.rms_norm_eps,
+            );
+        }
+        match &layer.ffn {
+            FfnBlock::Dense(mlp) => mlp.forward_add(&normed, seq, x),
+            FfnBlock::Moe {
+                gate,
+                correction_bias,
+                shared,
+            } => {
+                let mut moe_out = vec![0.0f32; seq * hidden];
+                self.moe_forward(
+                    layer_idx,
+                    gate,
+                    correction_bias.as_deref(),
+                    shared.as_ref(),
+                    &normed,
+                    seq,
+                    &mut moe_out,
+                )?;
+                for (xv, mv) in x.iter_mut().zip(&moe_out) {
+                    *xv += mv;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// MoE block for `seq` positions of `x` (post-attention-layernormed),
+    /// accumulated into `out` (which must be zeroed by the caller).
     #[allow(clippy::too_many_arguments)]
     fn moe_forward(
         &self,
@@ -128,12 +207,12 @@ impl DeepseekMoeModel {
                     layer: layer_idx,
                     expert: choice.expert,
                 })?;
-                matmul(&mut g, xs, &expert.gate_proj.data, 1, hidden, inter);
-                matmul(&mut u, xs, &expert.up_proj.data, 1, hidden, inter);
+                expert.gate_proj.matvec(&mut g, xs);
+                expert.up_proj.matvec(&mut u, xs);
                 for (gv, uv) in g.iter_mut().zip(&u) {
                     *gv = silu(*gv) * uv;
                 }
-                matmul(&mut d, &g, &expert.down_proj.data, 1, inter, hidden);
+                expert.down_proj.matvec(&mut d, &g);
                 let os = &mut out[s * hidden..(s + 1) * hidden];
                 for (o, v) in os.iter_mut().zip(&d) {
                     *o += choice.weight * v;
@@ -146,20 +225,189 @@ impl DeepseekMoeModel {
         Ok(())
     }
 
-    /// Full-sequence teacher-forcing forward. Returns logits `[seq, vocab]`.
-    pub fn forward(&self, token_ids: &[usize]) -> engine_core::Result<Tensor> {
+    /// Speculatively route layer `target` on hidden state `x` and hint the
+    /// store. Pure I/O optimization: results are never used for compute.
+    fn pilot_prefetch(&self, target: usize, x: &[f32]) {
+        let layer = &self.layers[target];
+        let FfnBlock::Moe {
+            gate,
+            correction_bias,
+            ..
+        } = &layer.ffn
+        else {
+            return;
+        };
         let c = &self.cfg;
+        let mut nrm = vec![0.0f32; c.hidden_size];
+        rmsnorm(&mut nrm, x, &layer.post_attn_norm, c.rms_norm_eps);
+        let mut logits = vec![0.0f32; c.n_routed_experts];
+        matmul(
+            &mut logits,
+            &nrm,
+            &gate.data,
+            1,
+            c.hidden_size,
+            c.n_routed_experts,
+        );
+        for choice in self.router.route(&logits, correction_bias.as_deref()) {
+            self.store.prefetch(ExpertKey {
+                layer: target,
+                expert: choice.expert,
+            });
+        }
+    }
+
+    /// Start a fresh inference session (own KV cache).
+    pub fn session(&self) -> InferenceSession<'_> {
+        InferenceSession {
+            model: self,
+            kv: (0..self.cfg.num_hidden_layers)
+                .map(|_| LayerKvCache::default())
+                .collect(),
+            pos: 0,
+            attn_path: AttnPath::Auto,
+            tokens: Vec::new(),
+            hidden: Vec::new(),
+        }
+    }
+
+    /// Full-sequence teacher-forcing forward with a throwaway session.
+    /// Returns logits `[seq, vocab]`.
+    pub fn forward(&self, token_ids: &[usize]) -> engine_core::Result<Tensor> {
+        let mut s = self.session();
+        s.prefill(token_ids)
+    }
+
+    /// Greedy decode (temperature 0), stopping on `extra_stop_ids` or the
+    /// model's own stop tokens.
+    pub fn greedy_decode(
+        &self,
+        prompt: &[usize],
+        max_new_tokens: usize,
+        extra_stop_ids: &[usize],
+    ) -> engine_core::Result<Vec<usize>> {
+        engine_core::greedy_decode(self, prompt, max_new_tokens, extra_stop_ids)
+    }
+}
+
+impl engine_core::Model for DeepseekMoeModel {
+    fn architecture(&self) -> &'static str {
+        "deepseek_moe"
+    }
+
+    fn vocab_size(&self) -> usize {
+        self.cfg.vocab_size
+    }
+
+    fn max_context(&self) -> usize {
+        self.cfg.max_position_embeddings
+    }
+
+    fn stop_ids(&self) -> &[usize] {
+        &self.stop_ids
+    }
+
+    fn new_session(&self) -> Box<dyn engine_core::Session + '_> {
+        Box::new(self.session())
+    }
+
+    fn store_stats(&self) -> engine_core::StoreStatsSnapshot {
+        self.store.stats()
+    }
+
+    fn expert_usage(&self) -> Vec<(ExpertKey, u64)> {
+        self.store.usage()
+    }
+}
+
+impl engine_core::Session for InferenceSession<'_> {
+    fn prefill(&mut self, token_ids: &[usize]) -> engine_core::Result<Tensor> {
+        InferenceSession::prefill(self, token_ids)
+    }
+
+    fn decode(&mut self, token_id: usize) -> engine_core::Result<Vec<f32>> {
+        InferenceSession::decode(self, token_id)
+    }
+
+    fn truncate(&mut self, len: usize) {
+        InferenceSession::truncate(self, len)
+    }
+
+    fn position(&self) -> usize {
+        InferenceSession::position(self)
+    }
+
+    fn kv_bytes(&self) -> usize {
+        InferenceSession::kv_bytes(self)
+    }
+}
+
+/// One conversation/completion in flight: positions consumed so far plus
+/// the per-layer compressed KV cache.
+pub struct InferenceSession<'m> {
+    pub(crate) model: &'m DeepseekMoeModel,
+    kv: Vec<LayerKvCache>,
+    pub(crate) pos: usize,
+    attn_path: AttnPath,
+    /// Consumed token ids (kept only when the model has an MTP head).
+    pub(crate) tokens: Vec<usize>,
+    /// Last-layer hidden states `[pos, hidden]`, pre-final-norm (kept only
+    /// when the model has an MTP head; the draft head consumes them).
+    pub(crate) hidden: Vec<f32>,
+}
+
+impl<'m> InferenceSession<'m> {
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
+    /// Force a specific attention path (tests, benchmarks).
+    pub fn set_attn_path(&mut self, path: AttnPath) {
+        self.attn_path = path;
+    }
+
+    /// KV cache bytes currently held.
+    pub fn kv_bytes(&self) -> usize {
+        self.kv.iter().map(|l| l.nbytes()).sum()
+    }
+
+    fn check_capacity(&self, extra: usize) -> engine_core::Result<()> {
+        let max = self.model.cfg.max_position_embeddings;
+        if self.pos + extra > max {
+            return Err(EngineError::ContextOverflow {
+                requested: self.pos + extra,
+                max,
+            });
+        }
+        Ok(())
+    }
+
+    /// Run `token_ids` through the model, extending the cache. Returns
+    /// logits `[seq, vocab]`.
+    pub fn prefill(&mut self, token_ids: &[usize]) -> engine_core::Result<Tensor> {
+        if token_ids.is_empty() {
+            return Err(EngineError::Other("empty prompt".into()));
+        }
+        self.check_capacity(token_ids.len())?;
+        let m = self.model;
+        let c = &m.cfg;
         let (seq, hidden) = (token_ids.len(), c.hidden_size);
-        let dims = self.mla_dims();
+        let dims = m.mla_dims();
 
         let mut x = vec![0.0f32; seq * hidden];
         for (s, &id) in token_ids.iter().enumerate() {
-            assert!(id < c.vocab_size, "token id {id} out of vocab");
-            x[s * hidden..(s + 1) * hidden].copy_from_slice(self.embed_tokens.row(id));
+            if id >= c.vocab_size {
+                return Err(EngineError::Other(format!(
+                    "token id {id} out of vocab ({})",
+                    c.vocab_size
+                )));
+            }
+            m.embed_row(id, &mut x[s * hidden..(s + 1) * hidden]);
         }
 
+        let single = seq == 1;
         let mut normed = vec![0.0f32; seq * hidden];
-        for (li, layer) in self.layers.iter().enumerate() {
+        for (li, layer) in m.layers.iter().enumerate() {
             for s in 0..seq {
                 rmsnorm(
                     &mut normed[s * hidden..(s + 1) * hidden],
@@ -168,9 +416,21 @@ impl DeepseekMoeModel {
                     c.rms_norm_eps,
                 );
             }
-            let attn_out = mla_forward(&dims, &layer.attn, &normed, seq);
+            let attn_out = mla_forward_cached(
+                &dims,
+                &layer.attn,
+                &normed,
+                seq,
+                &mut self.kv[li],
+                self.attn_path,
+            );
             for (xv, av) in x.iter_mut().zip(&attn_out) {
                 *xv += av;
+            }
+            // Decode-time pilot: hint next layer's experts while this
+            // layer's MoE computes.
+            if single && li + 1 < m.layers.len() {
+                m.pilot_prefetch(li + 1, &x);
             }
 
             for s in 0..seq {
@@ -188,10 +448,8 @@ impl DeepseekMoeModel {
                     correction_bias,
                     shared,
                 } => {
-                    // MoE writes into a zeroed buffer, then residual-adds:
-                    // routed order (weighted) then shared, matching reference.
                     let mut moe_out = vec![0.0f32; seq * hidden];
-                    self.moe_forward(
+                    m.moe_forward(
                         li,
                         gate,
                         correction_bias.as_deref(),
@@ -206,54 +464,42 @@ impl DeepseekMoeModel {
                 }
             }
         }
+        self.pos += seq;
+        if m.mtp.is_some() {
+            self.tokens.extend_from_slice(token_ids);
+            self.hidden.extend_from_slice(&x);
+        }
 
         let mut logits = Tensor::zeros(vec![seq, c.vocab_size]);
         for s in 0..seq {
             rmsnorm(
                 &mut normed[s * hidden..(s + 1) * hidden],
                 &x[s * hidden..(s + 1) * hidden],
-                &self.final_norm,
+                &m.final_norm,
                 c.rms_norm_eps,
             );
-            matmul(
+            m.lm_head.matvec(
                 &mut logits.data[s * c.vocab_size..(s + 1) * c.vocab_size],
                 &normed[s * hidden..(s + 1) * hidden],
-                &self.lm_head.data,
-                1,
-                hidden,
-                c.vocab_size,
             );
         }
         Ok(logits)
     }
 
-    /// Greedy decode by repeated full forward (oracle-scale only).
-    pub fn greedy_decode(
-        &self,
-        prompt: &[usize],
-        max_new_tokens: usize,
-        stop_ids: &[usize],
-    ) -> engine_core::Result<Vec<usize>> {
-        let mut ids = prompt.to_vec();
-        for _ in 0..max_new_tokens {
-            let logits = self.forward(&ids)?;
-            let last = logits.row(ids.len() - 1);
-            let next = argmax(last);
-            ids.push(next);
-            if stop_ids.contains(&next) {
-                break;
-            }
-        }
-        Ok(ids)
+    /// Feed one token, get next-token logits.
+    pub fn decode(&mut self, token_id: usize) -> engine_core::Result<Vec<f32>> {
+        let logits = self.prefill(&[token_id])?;
+        Ok(logits.data)
     }
-}
 
-pub fn argmax(v: &[f32]) -> usize {
-    let mut best = 0;
-    for (i, &x) in v.iter().enumerate() {
-        if x > v[best] {
-            best = i;
+    /// Roll the session back to `len` consumed tokens (shared-prefix reuse).
+    pub fn truncate(&mut self, len: usize) {
+        let dims = self.model.mla_dims();
+        for kv in &mut self.kv {
+            kv.truncate(len, &dims);
         }
+        self.pos = self.pos.min(len);
+        self.tokens.truncate(self.pos);
+        self.hidden.truncate(self.pos * self.model.cfg.hidden_size);
     }
-    best
 }

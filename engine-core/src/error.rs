@@ -20,6 +20,15 @@ pub enum EngineError {
     #[error("invalid model config: {0}")]
     InvalidConfig(String),
 
+    #[error("quantization error: {0}")]
+    Quant(String),
+
+    #[error("context overflow: sequence length {requested} exceeds maximum {max}")]
+    ContextOverflow { requested: usize, max: usize },
+
+    #[error("tokenizer error: {0}")]
+    Tokenizer(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 

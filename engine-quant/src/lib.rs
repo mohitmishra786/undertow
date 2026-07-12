@@ -1,49 +1,52 @@
-//! Matmul kernels and small math primitives.
+//! Quantized weight storage and matmul kernels.
 //!
-//! Phase 0 ships the *scalar f32 reference path only*. Every future kernel
-//! (int8/int4 dequant-on-use, NEON/AVX2 SIMD) must be validated against
-//! these functions before it is trusted. Keep this crate dependency-free
-//! and slice-based so the reference path stays trivially auditable.
+//! Everything the engine multiplies against a weight matrix goes through
+//! [`QTensor`]: f32, int8 or int4 with symmetric per-output-row scales.
+//! Kernels are scalar and written for auditability; SIMD variants will be
+//! validated against these before they are trusted.
+//!
+//! Kernel semantics (fixed, tests depend on them):
+//!   `out[o] = scale[o] * Σ_i x[i] * q[o][i]`
+//! with the sum accumulated in f32 in index order. Dequantization happens
+//! per element inside the accumulation, the scale is applied once per row.
+//!
+//! This crate stays free of workspace dependencies on purpose.
 
-/// Storage formats the quantized kernels will support. Only `F32` has a
-/// compute path today; the variants exist so container/converter code can
-/// already speak the right vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuantFormat {
-    F32,
-    /// Per-output-row scale, 8-bit signed weights. (Phase 1)
-    Int8,
-    /// Per-output-row scale, packed 4-bit. (Phase 1)
-    Int4,
-    /// Per-output-row scale, packed 2-bit. (Phase 2)
-    Int2,
-}
+mod kernels;
+#[cfg(target_arch = "aarch64")]
+mod neon;
+mod qtensor;
 
-/// `out[s, o] = Σ_i x[s, i] * w[o, i]` — row-major everywhere,
-/// `w` is `[out_dim, in_dim]` (PyTorch `nn.Linear` layout, i.e. `y = W x`).
-///
-/// * `x`: `[seq, in_dim]`
-/// * `out`: `[seq, out_dim]`
-pub fn matmul(out: &mut [f32], x: &[f32], w: &[f32], seq: usize, in_dim: usize, out_dim: usize) {
-    assert_eq!(x.len(), seq * in_dim, "x shape");
-    assert_eq!(w.len(), out_dim * in_dim, "w shape");
-    assert_eq!(out.len(), seq * out_dim, "out shape");
-    for s in 0..seq {
-        let xs = &x[s * in_dim..(s + 1) * in_dim];
-        let os = &mut out[s * out_dim..(s + 1) * out_dim];
-        for (o, oo) in os.iter_mut().enumerate() {
-            let wr = &w[o * in_dim..(o + 1) * in_dim];
-            let mut acc = 0.0f32;
-            for i in 0..in_dim {
-                acc += xs[i] * wr[i];
-            }
-            *oo = acc;
+pub use qtensor::{QTensor, QuantFormat};
+
+#[cfg(test)]
+pub(crate) mod tests_rng {
+    /// Tiny xorshift for kernel property tests (not the oracle RNG).
+    pub struct Rng(u64);
+
+    impl Rng {
+        pub fn new(seed: u64) -> Self {
+            Self(seed.max(1))
+        }
+
+        pub fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+
+        /// Uniform-ish in [-1, 1].
+        pub fn f32_sym(&mut self) -> f32 {
+            ((self.next() >> 40) as f32 / (1u64 << 23) as f32) * 2.0 - 1.0
         }
     }
 }
 
 /// RMSNorm: `out[i] = x[i] / rms(x) * weight[i]`, mean computed in f64
-/// (matches the f32-sensitive parts of the reference C implementation).
+/// (norms are numerically sensitive; they stay f32 end to end).
 pub fn rmsnorm(out: &mut [f32], x: &[f32], weight: &[f32], eps: f32) {
     let n = x.len();
     assert_eq!(weight.len(), n);
@@ -78,13 +81,33 @@ pub fn silu(x: f32) -> f32 {
     x / (1.0 + (-x).exp())
 }
 
+/// `out[s, o] = Σ_i x[s, i] * w[o, i]` — plain f32 slices, row-major,
+/// `w` is `[out_dim, in_dim]`. Kept public for callers that hold raw f32
+/// (router gates, norm-adjacent small matmuls).
+pub fn matmul(out: &mut [f32], x: &[f32], w: &[f32], seq: usize, in_dim: usize, out_dim: usize) {
+    assert_eq!(x.len(), seq * in_dim, "x shape");
+    assert_eq!(w.len(), out_dim * in_dim, "w shape");
+    assert_eq!(out.len(), seq * out_dim, "out shape");
+    for s in 0..seq {
+        let xs = &x[s * in_dim..(s + 1) * in_dim];
+        let os = &mut out[s * out_dim..(s + 1) * out_dim];
+        for (o, oo) in os.iter_mut().enumerate() {
+            let wr = &w[o * in_dim..(o + 1) * in_dim];
+            let mut acc = 0.0f32;
+            for i in 0..in_dim {
+                acc += xs[i] * wr[i];
+            }
+            *oo = acc;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn matmul_identity() {
-        // w = I(3), x = [1,2,3] -> out = x
         let w = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
         let x = [1., 2., 3.];
         let mut out = [0.; 3];
@@ -94,7 +117,6 @@ mod tests {
 
     #[test]
     fn matmul_hand_computed() {
-        // w [2,3] = [[1,2,3],[4,5,6]], x [2,3] two rows
         let w = [1., 2., 3., 4., 5., 6.];
         let x = [1., 1., 1., 0., 1., 2.];
         let mut out = [0.; 4];
@@ -108,7 +130,6 @@ mod tests {
         let w = [1.0f32, 1.0];
         let mut out = [0.0f32; 2];
         rmsnorm(&mut out, &x, &w, 0.0);
-        // rms = sqrt((9+16)/2) = sqrt(12.5)
         let r = 12.5f32.sqrt();
         assert!((out[0] - 3.0 / r).abs() < 1e-6);
         assert!((out[1] - 4.0 / r).abs() < 1e-6);

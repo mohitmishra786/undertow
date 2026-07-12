@@ -100,6 +100,14 @@ pub trait RouterAdapter: Send + Sync {
     fn route(&self, gate_logits: &[f32], correction_bias: Option<&[f32]>) -> Vec<ExpertChoice>;
 }
 
+/// Maps an expert address to the tensor names holding its weights in a
+/// checkpoint. Implemented per architecture family so the disk store can
+/// stay ignorant of naming conventions.
+pub trait ExpertNaming: Send + Sync {
+    /// `[gate_proj, up_proj, down_proj]` tensor names for one expert.
+    fn expert_tensor_names(&self, key: crate::store::ExpertKey) -> [String; 3];
+}
+
 /// Describes one model architecture family to the runtime.
 pub trait ModelAdapter: Send + Sync {
     /// Stable architecture id, e.g. `"deepseek_v3"`.

@@ -11,5 +11,6 @@ authors.workspace = true
 engine-core.workspace = true
 engine-quant.workspace = true
 engine-io.workspace = true
+engine-convert.workspace = true
 serde.workspace = true
 serde_json.workspace = true

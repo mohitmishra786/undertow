@@ -1,54 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 368" font-family="Helvetica, Arial, sans-serif" role="img" aria-label="Crate dependency graph">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 560" font-family="Helvetica, Arial, sans-serif" role="img" aria-label="Crate layering">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#64748b"/>
     </marker>
   </defs>
   <style>
-    .box { fill: rgba(100,116,139,0.08); stroke: #64748b; stroke-width: 1.5; rx: 8; }
-    .name { fill: #339af0; font-family: Menlo, 'Courier New', monospace; font-size: 15px; font-weight: bold; text-anchor: middle; }
-    .role { fill: #64748b; font-size: 11px; text-anchor: middle; }
+    .band { fill: rgba(51,154,240,0.05); stroke: #339af0; stroke-width: 1.2; }
+    .bandlabel { fill: #339af0; font-size: 12px; font-weight: bold; }
+    .box { fill: rgba(100,116,139,0.10); stroke: #64748b; stroke-width: 1.4; }
+    .name { fill: #339af0; font-family: Menlo, 'Courier New', monospace; font-size: 13px; font-weight: bold; text-anchor: middle; }
+    .role { fill: #64748b; font-size: 10.5px; text-anchor: middle; }
     .edge { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
-    .dev  { stroke-dasharray: 5 4; }
   </style>
 
-  <!-- top row -->
-  <rect class="box" x="100" y="18" width="170" height="52" rx="8"/>
-  <text class="name" x="185" y="40">engine-cli</text>
-  <text class="role" x="185" y="58">run, bench, convert, chat</text>
+  <!-- frontends -->
+  <rect class="band" x="20" y="16" width="720" height="86" rx="10"/>
+  <text class="bandlabel" x="34" y="36">frontends</text>
+  <rect class="box" x="60" y="44" width="180" height="46" rx="7"/>
+  <text class="name" x="150" y="64">engine-cli</text>
+  <text class="role" x="150" y="80">convert, run, chat, serve, bench</text>
+  <rect class="box" x="290" y="44" width="180" height="46" rx="7"/>
+  <text class="name" x="380" y="64">engine-server</text>
+  <text class="role" x="380" y="80">OpenAI-compatible HTTP</text>
+  <rect class="box" x="520" y="44" width="180" height="46" rx="7"/>
+  <text class="name" x="610" y="64">engine-bench</text>
+  <text class="role" x="610" y="80">oracle models, correctness</text>
 
-  <rect class="box" x="410" y="18" width="170" height="52" rx="8"/>
-  <text class="name" x="495" y="40">engine-bench</text>
-  <text class="role" x="495" y="58">oracle models, correctness</text>
+  <!-- adapters -->
+  <rect class="band" x="20" y="122" width="720" height="140" rx="10"/>
+  <text class="bandlabel" x="34" y="142">engine-adapters/ (one crate per family)</text>
+  <rect class="box" x="60" y="152" width="200" height="46" rx="7"/>
+  <text class="name" x="160" y="172">deepseek-moe</text>
+  <text class="role" x="160" y="188">MLA, noaux_tc router, MTP</text>
+  <rect class="box" x="290" y="152" width="180" height="46" rx="7"/>
+  <text class="name" x="380" y="172">mixtral-moe</text>
+  <text class="role" x="380" y="188">softmax router, windowed GQA</text>
+  <rect class="box" x="500" y="152" width="180" height="46" rx="7"/>
+  <text class="name" x="590" y="172">qwen-moe</text>
+  <text class="role" x="590" y="188">q/k norms, sparse steps</text>
+  <rect class="box" x="360" y="208" width="220" height="42" rx="7"/>
+  <text class="name" x="470" y="227">moe-common</text>
+  <text class="role" x="470" y="242">shared GQA forward, loader, sessions</text>
+  <path class="edge" d="M390 198 C 400 202, 420 206, 440 210"/>
+  <path class="edge" d="M580 198 C 570 202, 550 206, 520 210"/>
 
-  <!-- middle row -->
-  <text class="role" x="340" y="126">engine-adapters/</text>
-  <rect class="box" x="245" y="132" width="190" height="52" rx="8"/>
-  <text class="name" x="340" y="154">deepseek-moe</text>
-  <text class="role" x="340" y="172">router, MLA, model, loader</text>
+  <!-- services -->
+  <rect class="band" x="20" y="282" width="720" height="86" rx="10"/>
+  <text class="bandlabel" x="34" y="302">services</text>
+  <rect class="box" x="120" y="310" width="220" height="46" rx="7"/>
+  <text class="name" x="230" y="330">engine-convert</text>
+  <text class="role" x="230" y="346">streaming resumable quantizer</text>
+  <rect class="box" x="420" y="310" width="220" height="46" rx="7"/>
+  <text class="name" x="530" y="330">engine-tokenizer</text>
+  <text class="role" x="530" y="346">BPE, chat templates, streaming</text>
 
-  <!-- bottom row -->
-  <rect class="box" x="35" y="252" width="170" height="52" rx="8"/>
-  <text class="name" x="120" y="274">engine-core</text>
-  <text class="role" x="120" y="292">traits, tensor, errors</text>
+  <!-- runtime -->
+  <rect class="band" x="20" y="388" width="720" height="86" rx="10"/>
+  <text class="bandlabel" x="34" y="408">runtime</text>
+  <rect class="box" x="120" y="416" width="220" height="46" rx="7"/>
+  <text class="name" x="230" y="436">engine-core</text>
+  <text class="role" x="230" y="452">traits, caches, sampling, profiles</text>
+  <rect class="box" x="420" y="416" width="220" height="46" rx="7"/>
+  <text class="name" x="530" y="436">engine-io</text>
+  <text class="role" x="530" y="452">pread safetensors, disk store</text>
 
-  <rect class="box" x="255" y="252" width="170" height="52" rx="8"/>
-  <text class="name" x="340" y="274">engine-quant</text>
-  <text class="role" x="340" y="292">scalar kernels, quant later</text>
+  <!-- kernels -->
+  <rect class="band" x="20" y="494" width="720" height="52" rx="10"/>
+  <text class="bandlabel" x="34" y="514">kernels</text>
+  <rect class="box" x="270" y="502" width="220" height="38" rx="7"/>
+  <text class="name" x="380" y="519">engine-quant</text>
+  <text class="role" x="380" y="533">scalar reference + NEON, int8/int4</text>
 
-  <rect class="box" x="475" y="252" width="170" height="52" rx="8"/>
-  <text class="name" x="560" y="274">engine-io</text>
-  <text class="role" x="560" y="292">safetensors via pread</text>
+  <!-- band-to-band arrows -->
+  <path class="edge" d="M380 102 L380 116"/>
+  <path class="edge" d="M380 262 L380 276"/>
+  <path class="edge" d="M380 368 L380 382"/>
+  <path class="edge" d="M380 474 L380 488"/>
 
-  <!-- edges: arrow points at the dependency -->
-  <path class="edge" d="M270 44 L404 44"/>
-  <path class="edge" d="M222 70 C 250 100, 270 115, 296 128"/>
-  <path class="edge dev" d="M458 70 C 430 100, 410 115, 384 128"/>
-  <path class="edge" d="M513 70 C 530 130, 548 190, 557 246"/>
-  <path class="edge" d="M282 184 C 220 210, 170 230, 133 246"/>
-  <path class="edge" d="M340 184 L340 246"/>
-  <path class="edge" d="M398 184 C 460 210, 510 230, 547 246"/>
-  <path class="edge" d="M540 304 C 520 336, 160 336, 128 308"/>
-
-  <text class="role" x="20" y="360" style="text-anchor:start">arrows point at the crate being depended on; dashed = dev dependency; transitive edges omitted</text>
+  <text class="role" x="740" y="556" style="text-anchor:end">dependencies point downward; a crate may use anything in the bands beneath it</text>
 </svg>

@@ -5,28 +5,43 @@
 //! * [`adapter::ModelAdapter`] / [`adapter::RouterAdapter`] — describe one
 //!   model architecture family (attention kind, router math, expert layout)
 //!   without the core knowing anything about specific models.
-//! * [`store::TieredStore`] — the disk → RAM → (optional GPU) weight
-//!   hierarchy behind a single `get_expert` call. Phase 0 ships a
-//!   RAM-resident implementation; disk streaming replaces it without
-//!   touching any caller.
-//! * [`cache::ExpertCache`] — eviction policy for the RAM tier (LRU first,
-//!   importance-weighted later).
+//! * [`store::TieredStore`] — the disk → RAM weight hierarchy behind a
+//!   single `get_expert` call. The disk-backed implementation lives in
+//!   `engine-io`; a RAM-resident one lives here for f32 checkpoints and
+//!   tests.
+//! * [`cache::ExpertCache`] — eviction policy for the RAM tier.
+//!   [`cache::LruExpertCache`] is the byte-budgeted default with pinning.
+//! * [`sample`] — deterministic token sampling (greedy, temperature,
+//!   top-k, top-p) shared by every frontend.
+//! * [`mem`] — physical-memory detection for cache auto-sizing.
 //!
 //! Design rule: the forward pass may only reach routed-expert weights
-//! through `TieredStore`, even while the phase-0 store is a HashMap. That
-//! keeps the streaming boundary honest from day one.
+//! through `TieredStore`. That keeps the streaming boundary honest.
 
 pub mod adapter;
 pub mod cache;
 pub mod error;
-pub mod scheduler;
+pub mod mem;
+pub mod model;
+pub mod profile;
+pub mod router;
+pub mod sample;
 pub mod store;
 pub mod tensor;
 
 pub use adapter::{
-    AttentionKind, ExpertLayout, ModelAdapter, MtpHeadSpec, RopeKind, RouterAdapter,
+    AttentionKind, ExpertLayout, ExpertNaming, ModelAdapter, MtpHeadSpec, RopeKind, RouterAdapter,
 };
-pub use cache::ExpertCache;
+pub use cache::{ExpertCache, LruExpertCache, WeightedExpertCache};
 pub use error::{EngineError, Result};
-pub use store::{ExpertKey, ExpertWeights, TieredStore};
+pub use model::{generate, greedy_decode, Model, Session};
+pub use profile::ExpertProfile;
+pub use router::SoftmaxTopKRouter;
+pub use store::{
+    ExpertKey, ExpertWeights, ResidentStore, StoreStats, StoreStatsSnapshot, TieredStore,
+};
 pub use tensor::Tensor;
+
+// The quantized weight type is core vocabulary; re-export so most crates
+// only need engine-core.
+pub use engine_quant::{QTensor, QuantFormat};

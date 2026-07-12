@@ -15,5 +15,9 @@ serde_json.workspace = true
 
 [dev-dependencies]
 deepseek-moe.workspace = true
+mixtral-moe.workspace = true
+qwen-moe.workspace = true
 engine-quant.workspace = true
+engine-convert.workspace = true
+serde.workspace = true
 tempfile = "3"

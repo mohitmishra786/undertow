@@ -10,4 +10,4 @@
 pub mod oracle;
 pub mod rng;
 
-pub use oracle::{generate_oracle, OracleSpec};
+pub use oracle::{generate_mixtral_oracle, generate_oracle, generate_qwen_oracle, OracleSpec};

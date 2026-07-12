@@ -167,32 +167,63 @@ impl SafetensorsReader {
         Ok(buf)
     }
 
+    /// Read rows `[row_start, row_start + nrows)` of a 2-D tensor as f32.
+    /// This is the constant-memory path the converter streams through:
+    /// a 10GB embedding matrix is processed in row chunks without ever
+    /// being resident at once.
+    pub fn read_f32_rows(&self, name: &str, row_start: usize, nrows: usize) -> Result<Tensor> {
+        let info = self.info(name)?.clone();
+        if info.shape.len() != 2 {
+            return Err(EngineError::Other(format!(
+                "{name}: read_f32_rows requires a 2-D tensor, shape is {:?}",
+                info.shape
+            )));
+        }
+        let (out_dim, in_dim) = (info.shape[0], info.shape[1]);
+        if row_start + nrows > out_dim {
+            return Err(EngineError::Other(format!(
+                "{name}: rows {row_start}..{} out of bounds for {out_dim}",
+                row_start + nrows
+            )));
+        }
+        let elem = info.dtype.byte_size();
+        let offset = info.offset + (row_start * in_dim * elem) as u64;
+        let mut raw = vec![0u8; nrows * in_dim * elem];
+        read_exact_at(&self.file, &mut raw, offset)?;
+        let data = decode_f32(&raw, info.dtype, name, &self.path)?;
+        Ok(Tensor::new(vec![nrows, in_dim], data))
+    }
+
     /// Read a tensor and convert to f32 (from F32, F16 or BF16 storage).
     pub fn read_f32(&self, name: &str) -> Result<Tensor> {
         let info = self.info(name)?.clone();
         let raw = self.read_raw(name)?;
-        let data = match info.dtype {
-            Dtype::F32 => raw
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect(),
-            Dtype::BF16 => raw
-                .chunks_exact(2)
-                .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
-                .collect(),
-            Dtype::F16 => raw
-                .chunks_exact(2)
-                .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
-                .collect(),
-            other => {
-                return Err(EngineError::Other(format!(
-                    "{}: cannot convert {other:?} tensor {name} to f32",
-                    self.path.display()
-                )))
-            }
-        };
+        let data = decode_f32(&raw, info.dtype, name, &self.path)?;
         Ok(Tensor::new(info.shape, data))
     }
+}
+
+fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, path: &Path) -> Result<Vec<f32>> {
+    Ok(match dtype {
+        Dtype::F32 => raw
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+        Dtype::BF16 => raw
+            .chunks_exact(2)
+            .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
+        Dtype::F16 => raw
+            .chunks_exact(2)
+            .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
+        other => {
+            return Err(EngineError::Other(format!(
+                "{}: cannot convert {other:?} tensor {name} to f32",
+                path.display()
+            )))
+        }
+    })
 }
 
 /// A model directory: either a single `model.safetensors` or a sharded
@@ -274,8 +305,63 @@ impl ShardedModelReader {
         self.shard_for(name)?.read_f32(name)
     }
 
+    pub fn read_f32_rows(&self, name: &str, row_start: usize, nrows: usize) -> Result<Tensor> {
+        self.shard_for(name)?.read_f32_rows(name, row_start, nrows)
+    }
+
     pub fn read_raw(&self, name: &str) -> Result<Vec<u8>> {
         self.shard_for(name)?.read_raw(name)
+    }
+}
+
+/// Read a weight matrix as a [`QTensor`], transparently handling both
+/// plain checkpoints (F32/BF16/F16 tensor) and converted quantized ones
+/// (`<name>` U8 payload + `<name>.scales` F32).
+///
+/// The quantized format is deduced from the payload size against the
+/// logical dims: `out*in` bytes is int8, `out*ceil(in/2)` is int4. The two
+/// only collide at `in_dim == 1`, which no real projection has; int8 wins
+/// there.
+pub fn read_qtensor(
+    reader: &ShardedModelReader,
+    name: &str,
+    out_dim: usize,
+    in_dim: usize,
+) -> Result<engine_core::QTensor> {
+    use engine_core::{QTensor, QuantFormat};
+    let scales_name = format!("{name}.scales");
+    if reader.has(&scales_name) {
+        let payload = reader.read_raw(name)?;
+        let scales_t = reader.read_f32(&scales_name)?;
+        if scales_t.shape != [out_dim] {
+            return Err(EngineError::ShapeMismatch {
+                name: scales_name,
+                expected: vec![out_dim],
+                got: scales_t.shape,
+            });
+        }
+        let fmt = if payload.len() == QuantFormat::Int8.payload_bytes(out_dim, in_dim) {
+            QuantFormat::Int8
+        } else if payload.len() == QuantFormat::Int4.payload_bytes(out_dim, in_dim) {
+            QuantFormat::Int4
+        } else {
+            return Err(EngineError::Other(format!(
+                "{name}: payload of {} bytes matches neither int8 nor int4 for [{out_dim}, {in_dim}]",
+                payload.len()
+            )));
+        };
+        QTensor::from_quantized(fmt, payload, scales_t.data, out_dim, in_dim)
+            .map_err(EngineError::Quant)
+    } else {
+        let t = reader.read_f32(name)?;
+        if t.shape != [out_dim, in_dim] {
+            return Err(EngineError::ShapeMismatch {
+                name: name.to_string(),
+                expected: vec![out_dim, in_dim],
+                got: t.shape,
+            });
+        }
+        Ok(QTensor::from_f32(t.data, out_dim, in_dim))
     }
 }
 
