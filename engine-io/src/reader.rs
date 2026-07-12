@@ -314,7 +314,7 @@ impl ShardedModelReader {
     }
 }
 
-/// Read a weight matrix as a [`QTensor`], transparently handling both
+/// Read a weight matrix as a [`engine_core::QTensor`], transparently handling both
 /// plain checkpoints (F32/BF16/F16 tensor) and converted quantized ones
 /// (`<name>` U8 payload + `<name>.scales` F32).
 ///
