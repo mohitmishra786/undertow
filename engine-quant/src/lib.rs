@@ -13,13 +13,17 @@
 //! This crate stays free of workspace dependencies on purpose.
 
 mod kernels;
-#[cfg(target_arch = "aarch64")]
+// Miri interprets rather than executes, so NEON intrinsics are out of its
+// reach; under Miri everything routes through the scalar reference path.
+#[cfg(all(target_arch = "aarch64", not(miri)))]
 mod neon;
 mod qtensor;
 
 pub use qtensor::{QTensor, QuantFormat};
 
-#[cfg(test)]
+// Only the NEON parity tests use this; on other architectures the module
+// would be dead code and fail `-D warnings` in CI.
+#[cfg(all(test, target_arch = "aarch64", not(miri)))]
 pub(crate) mod tests_rng {
     /// Tiny xorshift for kernel property tests (not the oracle RNG).
     pub struct Rng(u64);

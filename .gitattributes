@@ -1,0 +1,5 @@
+# Fixture checkpoints are byte-compared by tests; never let line-ending
+# normalization touch them.
+*.safetensors binary
+# Keep source line endings consistent across platforms.
+* text=auto eol=lf

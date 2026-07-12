@@ -280,7 +280,7 @@ impl QTensor {
         let (od, id) = (self.out_dim(), self.in_dim());
         assert_eq!(x.len(), seq * id, "x shape");
         assert_eq!(out.len(), seq * od, "out shape");
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(all(target_arch = "aarch64", not(miri)))]
         {
             match self {
                 Self::F32 { data, .. } => crate::neon::matmul_f32(out, x, data, seq, id, od),
@@ -292,7 +292,7 @@ impl QTensor {
                 }
             }
         }
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(any(not(target_arch = "aarch64"), miri))]
         self.matmul_scalar(out, x, seq);
     }
 
