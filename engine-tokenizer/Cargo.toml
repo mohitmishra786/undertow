@@ -6,12 +6,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+publish.workspace = true
 
 [dependencies]
 engine-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+# Pure-Rust regex backend (fancy-regex): no C/C++ toolchain needed, which
+# keeps Windows and cross builds working.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 minijinja = { version = "2", features = ["json"] }
 
 [dev-dependencies]

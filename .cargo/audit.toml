@@ -1,0 +1,11 @@
+# cargo-audit configuration. Keep the ignore list in sync with the
+# advisories section of deny.toml; both tools scan the same RUSTSEC
+# database but read separate configs.
+
+[advisories]
+ignore = [
+    # `paste` is archived (unmaintained, not a vulnerability). Pulled in
+    # transitively by tokenizers -> macro_rules_attribute; nothing we can
+    # swap locally. Revisit when tokenizers drops it.
+    "RUSTSEC-2024-0436",
+]
