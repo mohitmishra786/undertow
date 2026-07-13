@@ -14,7 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 # Pure-Rust regex backend (fancy-regex): no C/C++ toolchain needed, which
 # keeps Windows and cross builds working.
-tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 minijinja = { version = "2", features = ["json", "fuel"] }
 
 [dev-dependencies]
