@@ -1,0 +1,26 @@
+name: Performance report
+description: Share real-hardware numbers (these get collected into the docs)
+labels: [performance]
+body:
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      placeholder: CPU, RAM, disk type (NVMe/SATA/USB4), OS
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model and quantization
+      placeholder: e.g. Qwen3-30B-A3B, experts int4, dense int8
+    validations:
+      required: true
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Numbers
+      description: Output of `undertow bench forward` and/or tok/s from chat, plus the expert-store stats line.
+      render: text
+    validations:
+      required: true

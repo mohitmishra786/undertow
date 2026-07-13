@@ -1,0 +1,16 @@
+[package]
+name = "undertow-moe-common"
+description = "Shared machinery for GQA-attention MoE families (Mixtral, Qwen-MoE)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+undertow-core.workspace = true
+undertow-quant.workspace = true
+undertow-io.workspace = true
+serde_json.workspace = true
+rayon.workspace = true

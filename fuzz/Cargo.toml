@@ -1,0 +1,41 @@
+[package]
+name = "undertow-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+undertow-io = { path = "../undertow-io" }
+undertow-tokenizer = { path = "../undertow-tokenizer" }
+undertow-deepseek-moe = { path = "../adapters/undertow-deepseek-moe" }
+undertow-mixtral-moe = { path = "../adapters/undertow-mixtral-moe" }
+undertow-qwen-moe = { path = "../adapters/undertow-qwen-moe" }
+
+# Standalone: not a member of the main workspace.
+[workspace]
+
+[[bin]]
+name = "safetensors_header"
+path = "fuzz_targets/safetensors_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "model_config"
+path = "fuzz_targets/model_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chat_template"
+path = "fuzz_targets/chat_template.rs"
+test = false
+doc = false
+bench = false

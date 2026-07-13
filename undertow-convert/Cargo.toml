@@ -1,0 +1,17 @@
+[package]
+name = "undertow-convert"
+description = "Streaming, resumable HF checkpoint to quantized undertow checkpoint converter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+undertow-core.workspace = true
+undertow-io.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
