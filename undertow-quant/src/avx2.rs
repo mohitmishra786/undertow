@@ -43,8 +43,8 @@ unsafe fn dot_f32(x: &[f32], w: &[f32], n: usize) -> f32 {
         );
     }
     let mut acc = hsum256(acc0) + hsum256(acc1);
-    for i in chunks * 16..n {
-        acc += x[i] * w[i];
+    for (i, &xv) in x.iter().enumerate().take(n).skip(chunks * 16) {
+        acc += xv * w[i];
     }
     acc
 }
@@ -66,8 +66,8 @@ unsafe fn dot_i8(x: &[f32], q: &[i8], n: usize) -> f32 {
         acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(x.as_ptr().add(i + 8)), f1, acc1);
     }
     let mut acc = hsum256(acc0) + hsum256(acc1);
-    for i in chunks * 16..n {
-        acc += x[i] * q[i] as f32;
+    for (i, &xv) in x.iter().enumerate().take(n).skip(chunks * 16) {
+        acc += xv * q[i] as f32;
     }
     acc
 }
@@ -86,10 +86,15 @@ unsafe fn dot_i4(x: &[f32], packed: &[u8], n: usize) -> f32 {
         // Interleave to restore logical order, then sign-extend 4-bit
         // two's complement through the top of each i8 lane.
         let inter = _mm_unpacklo_epi8(even, odd);
-        let signed = _mm_srai_epi16(_mm_slli_epi16(_mm_cvtepi8_epi16(inter), 4), 4);
+        // Sign-extend the 4-bit two's-complement values inside 16-bit
+        // lanes: the nibble must travel to the top of the lane and back,
+        // so the shift is 12, not the 4 the 8-bit NEON idiom uses. The
+        // 4-shift variant leaves negative nibbles positive, which is
+        // exactly the bug the parity test on real AVX2 hardware caught.
+        let signed = _mm_srai_epi16(_mm_slli_epi16(_mm_cvtepi8_epi16(inter), 12), 12);
         let signed_hi = _mm_srai_epi16(
-            _mm_slli_epi16(_mm_cvtepi8_epi16(_mm_srli_si128(inter, 8)), 4),
-            4,
+            _mm_slli_epi16(_mm_cvtepi8_epi16(_mm_srli_si128(inter, 8)), 12),
+            12,
         );
         let f0 = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(signed));
         let f1 = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(signed_hi));
@@ -98,8 +103,8 @@ unsafe fn dot_i4(x: &[f32], packed: &[u8], n: usize) -> f32 {
         acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(x.as_ptr().add(i + 8)), f1, acc1);
     }
     let mut acc = hsum256(acc0) + hsum256(acc1);
-    for i in chunks * 16..n {
-        acc += x[i] * crate::kernels::unpack_i4(packed, i) as f32;
+    for (i, &xv) in x.iter().enumerate().take(n).skip(chunks * 16) {
+        acc += xv * crate::kernels::unpack_i4(packed, i) as f32;
     }
     acc
 }
@@ -196,6 +201,10 @@ mod tests {
     #[test]
     fn avx2_matches_scalar_for_all_formats() {
         if !super::avx2_available() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI x86 runners have AVX2+FMA; refusing to skip the parity test there"
+            );
             eprintln!("AVX2 not available on this CPU; skipping");
             return;
         }
