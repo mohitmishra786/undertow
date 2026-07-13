@@ -1,0 +1,41 @@
+name: Bug report
+description: Something behaves wrong
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: v0.1.0 or a commit sha
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: macOS 15 arm64 / Ubuntu 24.04 x64 / Windows 11
+    validations:
+      required: true
+  - type: textarea
+    id: model
+    attributes:
+      label: Model and conversion settings
+      placeholder: model_type, source checkpoint, convert flags (or oracle fixture)
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands, ideally against an oracle fixture so it reproduces without downloads.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected versus actual
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `undertow doctor --model <dir>`
+      render: text

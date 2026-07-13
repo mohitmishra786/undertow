@@ -1,0 +1,21 @@
+[package]
+name = "undertow-tokenizer"
+description = "HF tokenizer.json loading, chat templates, streaming detokenization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+undertow-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Pure-Rust regex backend (fancy-regex): no C/C++ toolchain needed, which
+# keeps Windows and cross builds working.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+minijinja = { version = "2", features = ["json", "fuel"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -8,7 +8,7 @@ This is a description of what is actually built and why it has the shape it has.
   <img src="../assets/crates.svg" width="700" alt="Crate layering">
 </p>
 
-`engine-quant` sits at the bottom: quantized weight storage, scalar reference kernels, and NEON implementations that are property-tested against the scalar ones (the scalar path stays the source of truth on every platform). `engine-core` owns the trait vocabulary plus everything every frontend shares: the caches, sampling, memory detection, hot-expert profiles, and the family-agnostic `Model` and `Session` traits the CLI and server drive inference through. Adapters live one crate per architecture family; Mixtral and Qwen3-MoE share their forward pass through `moe-common` because they differ only in naming, router normalization and two attention details. The runtime never branches on a model name; the CLI's registry maps `config.json` `model_type` to an adapter, and that is the only place family names appear together.
+`undertow-quant` sits at the bottom: quantized weight storage, scalar reference kernels, and NEON implementations that are property-tested against the scalar ones (the scalar path stays the source of truth on every platform). `undertow-core` owns the trait vocabulary plus everything every frontend shares: the caches, sampling, memory detection, hot-expert profiles, and the family-agnostic `Model` and `Session` traits the CLI and server drive inference through. Adapters live one crate per architecture family; Mixtral and Qwen3-MoE share their forward pass through `undertow-moe-common` because they differ only in naming, router normalization and two attention details. The runtime never branches on a model name; the CLI's registry maps `config.json` `model_type` to an adapter, and that is the only place family names appear together.
 
 ## The two traits that matter
 
@@ -58,7 +58,7 @@ Everything else is tested relative to that anchor, in a chain: quantized kernels
 
 ## The server
 
-`engine-server` puts an OpenAI-compatible surface over any `Model`: chat and text completions, SSE streaming, stop strings with holdback so a partial stop marker never reaches the client, and usage accounting. Generation runs single-flight behind a semaphore; one CPU-saturating forward pass at a time beats several thrashing each other's expert cache. The integration tests run against a live server over the oracle fixture with a byte-level tokenizer, so the whole HTTP to tokens to text path is exercised hermetically.
+`undertow-server` puts an OpenAI-compatible surface over any `Model`: chat and text completions, SSE streaming, stop strings with holdback so a partial stop marker never reaches the client, and usage accounting. Generation runs single-flight behind a semaphore; one CPU-saturating forward pass at a time beats several thrashing each other's expert cache. The integration tests run against a live server over the oracle fixture with a byte-level tokenizer, so the whole HTTP to tokens to text path is exercised hermetically.
 
 ## Why pread and not mmap
 

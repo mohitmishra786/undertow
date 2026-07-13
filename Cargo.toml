@@ -1,18 +1,19 @@
 [workspace]
 resolver = "2"
+exclude = ["fuzz"]
 members = [
-    "engine-core",
-    "engine-quant",
-    "engine-io",
-    "engine-convert",
-    "engine-tokenizer",
-    "engine-server",
-    "engine-adapters/deepseek-moe",
-    "engine-adapters/moe-common",
-    "engine-adapters/mixtral-moe",
-    "engine-adapters/qwen-moe",
-    "engine-bench",
-    "engine-cli",
+    "undertow-core",
+    "undertow-quant",
+    "undertow-io",
+    "undertow-convert",
+    "undertow-tokenizer",
+    "undertow-server",
+    "adapters/undertow-deepseek-moe",
+    "adapters/undertow-moe-common",
+    "adapters/undertow-mixtral-moe",
+    "adapters/undertow-qwen-moe",
+    "undertow-bench",
+    "undertow-cli",
 ]
 
 [workspace.package]
@@ -20,29 +21,32 @@ version = "0.1.0"
 # Path-only internal deps; publishing needs explicit versioning first.
 publish = false
 edition = "2021"
+# usize::is_multiple_of stabilized in 1.87; CI checks this floor.
+rust-version = "1.87"
 license = "Apache-2.0"
 repository = "https://github.com/mohitmishra786/undertow"
 authors = ["Mohit Mishra <immadmohit@gmail.com>"]
 
 [workspace.dependencies]
-engine-core = { path = "engine-core" }
-engine-quant = { path = "engine-quant" }
-engine-io = { path = "engine-io" }
-deepseek-moe = { path = "engine-adapters/deepseek-moe" }
-moe-common = { path = "engine-adapters/moe-common" }
-mixtral-moe = { path = "engine-adapters/mixtral-moe" }
-qwen-moe = { path = "engine-adapters/qwen-moe" }
-engine-convert = { path = "engine-convert" }
-engine-tokenizer = { path = "engine-tokenizer" }
-engine-server = { path = "engine-server" }
-engine-bench = { path = "engine-bench" }
+undertow-core = { path = "undertow-core" }
+undertow-quant = { path = "undertow-quant" }
+undertow-io = { path = "undertow-io" }
+undertow-deepseek-moe = { path = "adapters/undertow-deepseek-moe" }
+undertow-moe-common = { path = "adapters/undertow-moe-common" }
+undertow-mixtral-moe = { path = "adapters/undertow-mixtral-moe" }
+undertow-qwen-moe = { path = "adapters/undertow-qwen-moe" }
+undertow-convert = { path = "undertow-convert" }
+undertow-tokenizer = { path = "undertow-tokenizer" }
+undertow-server = { path = "undertow-server" }
+undertow-bench = { path = "undertow-bench" }
 
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 half = "2"
+rayon = "1"
 
 [profile.release]
 debug = true

@@ -1,0 +1,24 @@
+[package]
+name = "undertow-bench"
+description = "Synthetic oracle MoE model generator + correctness harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+undertow-core.workspace = true
+undertow-io.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+undertow-deepseek-moe.workspace = true
+undertow-mixtral-moe.workspace = true
+undertow-qwen-moe.workspace = true
+undertow-quant.workspace = true
+undertow-convert.workspace = true
+serde.workspace = true
+tempfile = "3"

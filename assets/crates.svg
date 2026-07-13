@@ -17,29 +17,29 @@
   <rect class="band" x="20" y="16" width="720" height="86" rx="10"/>
   <text class="bandlabel" x="34" y="36">frontends</text>
   <rect class="box" x="60" y="44" width="180" height="46" rx="7"/>
-  <text class="name" x="150" y="64">engine-cli</text>
+  <text class="name" x="150" y="64">undertow-cli</text>
   <text class="role" x="150" y="80">convert, run, chat, serve, bench</text>
   <rect class="box" x="290" y="44" width="180" height="46" rx="7"/>
-  <text class="name" x="380" y="64">engine-server</text>
+  <text class="name" x="380" y="64">undertow-server</text>
   <text class="role" x="380" y="80">OpenAI-compatible HTTP</text>
   <rect class="box" x="520" y="44" width="180" height="46" rx="7"/>
-  <text class="name" x="610" y="64">engine-bench</text>
+  <text class="name" x="610" y="64">undertow-bench</text>
   <text class="role" x="610" y="80">oracle models, correctness</text>
 
   <!-- adapters -->
   <rect class="band" x="20" y="122" width="720" height="140" rx="10"/>
-  <text class="bandlabel" x="34" y="142">engine-adapters/ (one crate per family)</text>
+  <text class="bandlabel" x="34" y="142">adapters/ (one crate per family)</text>
   <rect class="box" x="60" y="152" width="200" height="46" rx="7"/>
-  <text class="name" x="160" y="172">deepseek-moe</text>
+  <text class="name" x="160" y="172">undertow-deepseek-moe</text>
   <text class="role" x="160" y="188">MLA, noaux_tc router, MTP</text>
   <rect class="box" x="290" y="152" width="180" height="46" rx="7"/>
-  <text class="name" x="380" y="172">mixtral-moe</text>
+  <text class="name" x="380" y="172">undertow-mixtral-moe</text>
   <text class="role" x="380" y="188">softmax router, windowed GQA</text>
   <rect class="box" x="500" y="152" width="180" height="46" rx="7"/>
-  <text class="name" x="590" y="172">qwen-moe</text>
+  <text class="name" x="590" y="172">undertow-qwen-moe</text>
   <text class="role" x="590" y="188">q/k norms, sparse steps</text>
   <rect class="box" x="360" y="208" width="220" height="42" rx="7"/>
-  <text class="name" x="470" y="227">moe-common</text>
+  <text class="name" x="470" y="227">undertow-moe-common</text>
   <text class="role" x="470" y="242">shared GQA forward, loader, sessions</text>
   <path class="edge" d="M390 198 C 400 202, 420 206, 440 210"/>
   <path class="edge" d="M580 198 C 570 202, 550 206, 520 210"/>
@@ -48,27 +48,27 @@
   <rect class="band" x="20" y="282" width="720" height="86" rx="10"/>
   <text class="bandlabel" x="34" y="302">services</text>
   <rect class="box" x="120" y="310" width="220" height="46" rx="7"/>
-  <text class="name" x="230" y="330">engine-convert</text>
+  <text class="name" x="230" y="330">undertow-convert</text>
   <text class="role" x="230" y="346">streaming resumable quantizer</text>
   <rect class="box" x="420" y="310" width="220" height="46" rx="7"/>
-  <text class="name" x="530" y="330">engine-tokenizer</text>
+  <text class="name" x="530" y="330">undertow-tokenizer</text>
   <text class="role" x="530" y="346">BPE, chat templates, streaming</text>
 
   <!-- runtime -->
   <rect class="band" x="20" y="388" width="720" height="86" rx="10"/>
   <text class="bandlabel" x="34" y="408">runtime</text>
   <rect class="box" x="120" y="416" width="220" height="46" rx="7"/>
-  <text class="name" x="230" y="436">engine-core</text>
+  <text class="name" x="230" y="436">undertow-core</text>
   <text class="role" x="230" y="452">traits, caches, sampling, profiles</text>
   <rect class="box" x="420" y="416" width="220" height="46" rx="7"/>
-  <text class="name" x="530" y="436">engine-io</text>
+  <text class="name" x="530" y="436">undertow-io</text>
   <text class="role" x="530" y="452">pread safetensors, disk store</text>
 
   <!-- kernels -->
   <rect class="band" x="20" y="494" width="720" height="52" rx="10"/>
   <text class="bandlabel" x="34" y="514">kernels</text>
   <rect class="box" x="270" y="502" width="220" height="38" rx="7"/>
-  <text class="name" x="380" y="519">engine-quant</text>
+  <text class="name" x="380" y="519">undertow-quant</text>
   <text class="role" x="380" y="533">scalar reference + NEON, int8/int4</text>
 
   <!-- band-to-band arrows -->
