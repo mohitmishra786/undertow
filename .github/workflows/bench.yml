@@ -1,0 +1,43 @@
+name: Benchmarks
+
+# Manual and weekly only: benchmark numbers from shared runners are too
+# noisy to gate PRs, but the artifact trail catches large regressions.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Kernel micro-benchmarks
+        run: cargo bench -p undertow-quant --locked -- --output-format bencher | tee bench-kernels.txt
+      - name: End-to-end tok/s (synthetic model)
+        run: |
+          cargo build --release --locked -p undertow-cli
+          ./target/release/undertow bench gen-oracle --out /tmp/bench-model \
+            --hidden 768 --layers 4 --experts 32 --experts-per-tok 4 --moe-inter 1536 --vocab 8192
+          ./target/release/undertow convert --src /tmp/bench-model --out /tmp/bench-int4 \
+            --experts int4 --dense int8
+          ./target/release/undertow bench forward --model /tmp/bench-int4 \
+            --seq 64 --decode 64 | tee bench-e2e.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 (node24)
+        with:
+          name: bench-${{ matrix.os }}
+          path: bench-*.txt
+          retention-days: 90

@@ -1,0 +1,22 @@
+name: Model family request
+description: A model architecture the engine should support
+labels: [adapter]
+body:
+  - type: input
+    id: family
+    attributes:
+      label: Architecture / model_type
+      placeholder: e.g. "grok_moe"
+    validations:
+      required: true
+  - type: input
+    id: example
+    attributes:
+      label: Example checkpoint on the Hub
+    validations:
+      required: true
+  - type: textarea
+    id: differences
+    attributes:
+      label: What differs from the supported families
+      description: Router math, attention scheme, tensor naming; see docs/ADAPTER_GUIDE.md. PRs following the guide are very welcome.
