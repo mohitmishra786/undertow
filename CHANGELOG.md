@@ -54,6 +54,10 @@ Format follows keepachangelog.com; versions follow semver once published.
   Q4_K, Q6_K, Q8_0, Q4_0, F16, BF16, and F32 in bounded row chunks, de-interleaves 3-D expert
   matrices into per-layer expert shards (`experts-{layer:05}.safetensors`), and synthesizes
   compatible architecture configuration without intermediate disk expansion.
+- Gated DeltaNet / KDA linear recurrent attention and hybrid layer sequencing in
+  `undertow-moe-common` and `undertow-core` (`AttentionKind::GatedDeltaNet` and
+  `AttentionKind::Hybrid`), implementing causal $O(1)$ memory recurrence updates
+  per token for frontier 2026 hybrid linear-attention MoE models (Qwen3.5/3.8, Kimi K3, GLM-5.3).
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`

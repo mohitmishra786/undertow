@@ -34,11 +34,13 @@ The invariant the whole tier design hangs on, and the test I consider the most i
 
 ## Attention
 
-Two families of attention live in the tree, each with a compressed per-layer KV cache and incremental decode validated against one-shot forward.
+Three families of attention live in the tree, each with compressed per-layer cache states and incremental decode validated against one-shot forward.
 
 **MLA** (DeepSeek family) caches only the RMSNormed KV latent and the shared RoPEd key-rot vector: `kv_lora_rank + qk_rope_head_dim` floats per token per layer, a factor of about 57 less than full KV on GLM-5.2 class geometry. Prefill reconstructs k/v through `kv_b_proj` in one matmul; single-token decode uses weight absorption, folding `q_nope` through the K half of `kv_b` so scores read cached latents directly. Same math by linearity, tested against each other with quantized `kv_b` as well as f32, because absorption traverses the quantized matrix in a completely different access pattern and that is where a packing bug would hide. RoPE is the interleaved partial variant matching `transformers`' `apply_rotary_pos_emb_interleave`.
 
 **GQA** (Mixtral, Qwen) caches roped keys and values per KV head, with NeoX full-dim RoPE, optional per-head q/k RMSNorm (Qwen3), and an optional sliding window (Mixtral). The equivalence tests sweep KV-head counts including multi-query, both norm settings, and window edge cases.
+
+**Gated DeltaNet & Hybrid Linear Attention** (Qwen3.5/3.8, Kimi K3, GLM-5.3) maintains a constant $O(1)$ memory complexity per token ($d_v \times d_k$ matrix per head) using causal linear recurrence with delta-rule value correction and output gating ($S_t = \alpha_t S_{t-1} + \beta_t (v_t - S_{t-1} k_t) k_t^T$, $y_t = (S_t q_t) \odot \text{silu}(g_t)$). Hybrid sequencing dynamically alternates between full attention and linear recurrence layers according to model architecture configuration.
 
 ## Speculative decoding
 
