@@ -343,7 +343,8 @@ mod tests {
             tokenizers::pre_tokenizers::byte_level::ByteLevel::default().add_prefix_space(false),
         ));
         tok.with_decoder(Some(tokenizers::decoders::byte_level::ByteLevel::default()));
-        tok.add_special_tokens(&[tokenizers::AddedToken::from("<|eos|>", true)]);
+        tok.add_special_tokens([tokenizers::AddedToken::from("<|eos|>", true)])
+            .unwrap();
         tok.save(dir.path().join("tokenizer.json"), false).unwrap();
 
         std::fs::write(

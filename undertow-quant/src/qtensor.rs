@@ -100,10 +100,9 @@ impl QTensor {
         }
         match fmt {
             QuantFormat::F32 => {
-                let data = payload
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
+                let (words, tail) = payload.as_chunks::<4>();
+                debug_assert!(tail.is_empty(), "payload size was validated above");
+                let data = words.iter().map(|c| f32::from_le_bytes(*c)).collect();
                 Ok(Self::F32 {
                     out_dim,
                     in_dim,

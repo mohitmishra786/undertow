@@ -3,6 +3,7 @@ name = "undertow-moe-common"
 description = "Shared machinery for GQA-attention MoE families (Mixtral, Qwen-MoE)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

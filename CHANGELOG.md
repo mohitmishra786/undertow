@@ -22,13 +22,20 @@ Format follows keepachangelog.com; versions follow semver once published.
   header, model config, chat template) with a weekly fuzz workflow.
 - Manual tag-triggered release workflow producing a draft release with
   binaries, checksums, an SBOM and build provenance.
-- Declared MSRV 1.87, checked in CI.
+- Declared MSRV 1.88, checked in CI, and inherited by every workspace
+  member so the floor is enforced by cargo rather than by convention.
 
 ### Fixed
 - safetensors headers with malformed `data_offsets` arrays or overflowing
   shape products are rejected instead of panicking.
 - Chat template rendering is fuel-limited so untrusted templates cannot
   stall the process.
+- Byte-to-word decoding uses `slice::as_chunks`, clearing the
+  `chunks_exact` clippy lint on current stable.
+- Test tokenizer setup matches the `tokenizers` 0.23 owned-`AddedToken`
+  API, so the workspace builds against the bumped dependency.
+- Transitive `h2` and `rustls` updated past RUSTSEC-2026-0258 and
+  RUSTSEC-2026-0285, keeping `cargo audit` and `cargo deny` clean.
 
 ## 0.1.0 (2026-07-12)
 

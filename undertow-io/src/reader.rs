@@ -229,18 +229,24 @@ impl SafetensorsReader {
 
 fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, path: &Path) -> Result<Vec<f32>> {
     Ok(match dtype {
-        Dtype::F32 => raw
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect(),
-        Dtype::BF16 => raw
-            .chunks_exact(2)
-            .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
-            .collect(),
-        Dtype::F16 => raw
-            .chunks_exact(2)
-            .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
-            .collect(),
+        Dtype::F32 => {
+            let (words, _) = raw.as_chunks::<4>();
+            words.iter().map(|c| f32::from_le_bytes(*c)).collect()
+        }
+        Dtype::BF16 => {
+            let (halves, _) = raw.as_chunks::<2>();
+            halves
+                .iter()
+                .map(|c| half::bf16::from_le_bytes(*c).to_f32())
+                .collect()
+        }
+        Dtype::F16 => {
+            let (halves, _) = raw.as_chunks::<2>();
+            halves
+                .iter()
+                .map(|c| half::f16::from_le_bytes(*c).to_f32())
+                .collect()
+        }
         other => {
             return Err(EngineError::Other(format!(
                 "{}: cannot convert {other:?} tensor {name} to f32",
