@@ -64,6 +64,10 @@ Everything else is tested relative to that anchor, in a chain: quantized kernels
 
 With a 350 to 600 GB expert pool behind an 8 to 64 GB RAM budget, mmap hands residency decisions to the page cache, and RSS becomes something that happens to you rather than something you chose. That failure mode is worst on exactly the unified-memory machines this engine targets. Positioned reads into buffers we own keep RSS flat and leave residency to the cache policy. They are also offset-stateless, so concurrent expert fetches never fight over a shared file cursor; the concurrency tests lean on that directly.
 
+To prevent the OS buffer cache from duplicating or polluting RAM during large generation runs, `undertow-io` bypasses kernel page caching by default:
+- On macOS (Darwin/Apple Silicon), shard file descriptors are configured with `fcntl(fd, F_NOCACHE, 1)` at open, preventing XNU unified memory page compression and cache bloat.
+- On Linux, read ranges are managed with `posix_fadvise(..., POSIX_FADV_DONTNEED)` and random access flags to promptly release kernel pages after reading.
+
 ## What is next
 
 Full-size model benchmarks on real NVMe (the only item on this list blocked on hardware rather than code), rejection sampling so MTP speculation works losslessly under temperature, AVX-512 and Intel AMX matrix extensions for high-end x86 workstations, and the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start.

@@ -164,6 +164,10 @@ impl DiskExpertStore {
         }
         Ok(pinned)
     }
+
+    pub fn is_nocache(&self) -> bool {
+        self.shared.reader.is_nocache()
+    }
 }
 
 impl TieredStore for DiskExpertStore {
@@ -482,5 +486,13 @@ mod tests {
         assert_eq!(s2.misses, 1);
         assert_eq!(s2.hits, 1);
         assert_eq!(s2.read_count, 1); // read count unchanged
+    }
+
+    #[test]
+    fn disk_store_reports_nocache_status() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_model(dir.path(), 1, 2);
+        let store = open_store(dir.path(), 1024 * 1024, 0);
+        assert!(store.is_nocache());
     }
 }

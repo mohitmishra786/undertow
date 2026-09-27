@@ -35,6 +35,9 @@ Format follows keepachangelog.com; versions follow semver once published.
   automatic extraction of XML, markdown, and raw JSON tool calls in `undertow-server`.
 - Ollama API compatibility shim in `undertow-server` exposing `/api/tags` and
   streaming/unary `/api/chat` (application/x-ndjson).
+- OS buffer cache bypass in `undertow-io`: `F_NOCACHE` enabled by default on macOS
+  and `posix_fadvise` page cache invalidation on Linux, preventing RAM page cache
+  inflation during multi-thousand token generation runs.
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`
