@@ -24,7 +24,17 @@ pub fn model_type(dir: &Path) -> Result<String> {
 }
 
 /// Families served by the DeepSeek-style adapter (sigmoid noaux_tc + MLA).
-const DEEPSEEK_TYPES: &[&str] = &["deepseek_v3", "glm_moe", "glm_moe_dsa", "kimi_k2"];
+pub const DEEPSEEK_TYPES: &[&str] = &[
+    "deepseek_v2",
+    "deepseek_v3",
+    "deepseek_v4",
+    "glm_moe",
+    "glm_moe_dsa",
+    "kimi_k2",
+];
+
+/// Families served by the Qwen-style adapter (GQA + Q/K norms + softmax router).
+pub const QWEN_TYPES: &[&str] = &["qwen3_moe", "qwen2_moe"];
 
 pub fn load_any(dir: &Path, opts: &LoadOptions) -> Result<Box<dyn Model>> {
     let ty = model_type(dir)?;
@@ -33,9 +43,9 @@ pub fn load_any(dir: &Path, opts: &LoadOptions) -> Result<Box<dyn Model>> {
             Box::new(undertow_deepseek_moe::loader::load_model_with(dir, opts)?)
         }
         "mixtral" => Box::new(undertow_mixtral_moe::load_model_with(dir, opts)?),
-        "qwen3_moe" => Box::new(undertow_qwen_moe::load_model_with(dir, opts)?),
+        t if QWEN_TYPES.contains(&t) => Box::new(undertow_qwen_moe::load_model_with(dir, opts)?),
         other => bail!(
-            "unsupported model_type {other:?} (supported: {DEEPSEEK_TYPES:?}, \"mixtral\", \"qwen3_moe\")"
+            "unsupported model_type {other:?} (supported: {DEEPSEEK_TYPES:?}, \"mixtral\", {QWEN_TYPES:?})"
         ),
     };
     Ok(model)
@@ -46,7 +56,7 @@ pub fn classifier_for(dir: &Path) -> Result<fn(&str) -> Disposition> {
     Ok(match ty.as_str() {
         t if DEEPSEEK_TYPES.contains(&t) => undertow_deepseek_moe::classify_tensor,
         "mixtral" => undertow_mixtral_moe::classify_tensor,
-        "qwen3_moe" => undertow_qwen_moe::classify_tensor,
+        t if QWEN_TYPES.contains(&t) => undertow_qwen_moe::classify_tensor,
         other => bail!("unsupported model_type {other:?} for conversion"),
     })
 }
@@ -61,4 +71,52 @@ pub fn as_deepseek(
         bail!("--mtp is only available for DeepSeek-family models, got {ty:?}");
     }
     Ok(undertow_deepseek_moe::loader::load_model_with(dir, opts)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn all_supported_types_resolve_to_classifiers() {
+        let unique = format!(
+            "undertow-reg-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = TempDirGuard(dir.clone());
+        let config_path = dir.join("config.json");
+
+        let mut all_types = Vec::new();
+        all_types.extend_from_slice(DEEPSEEK_TYPES);
+        all_types.push("mixtral");
+        all_types.extend_from_slice(QWEN_TYPES);
+
+        for t in all_types {
+            std::fs::write(&config_path, format!(r#"{{"model_type": "{t}"}}"#)).unwrap();
+            let resolved_type = model_type(&dir).unwrap();
+            assert_eq!(resolved_type, t);
+            let classifier = classifier_for(&dir);
+            assert!(
+                classifier.is_ok(),
+                "model_type {t} should resolve to a classifier"
+            );
+        }
+
+        // Unsupported type
+        std::fs::write(&config_path, r#"{"model_type": "unknown_architecture"}"#).unwrap();
+        assert!(classifier_for(&dir).is_err());
+    }
 }

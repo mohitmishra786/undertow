@@ -4,7 +4,7 @@
 
 Undertow is a Rust inference engine for the largest open-weight MoE models, built on one observation: a trillion-parameter sparse model touches maybe 1 or 2 percent of its weights per token, so RAM should be a cache over the model, not a container for it. Routed experts live on disk as quantized shards and stream in on demand. Dense and shared weights stay resident. The thing you need to buy becomes disk, which is cheap, instead of RAM, which lately is not.
 
-Three architecture families run today behind one set of trait boundaries: the DeepSeek style (GLM-5.2, Kimi K2, DeepSeek-V3/V4), Mixtral, and Qwen3-MoE. Adding a family is one adapter crate; the runtime never branches on a model name. Design notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Three architecture families run today behind one set of trait boundaries: the DeepSeek style (GLM-5.2, Kimi K2, DeepSeek-V2/V3/V4), Mixtral, and Qwen MoE (Qwen2.5-MoE, Qwen3-MoE). Adding a family is one adapter crate; the runtime never branches on a model name. Design notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## What works
 

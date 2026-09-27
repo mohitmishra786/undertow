@@ -41,6 +41,10 @@ Format follows keepachangelog.com; versions follow semver once published.
 - Model name validation in `undertow-server` validates incoming `ChatRequest`
   and `CompletionRequest` `model` parameter against the loaded model name,
   eliminating `#[allow(dead_code)]` annotations and rejecting mismatches.
+- Model registry recognizes `deepseek_v4`, `deepseek_v2`, and `qwen2_moe`
+  architectures; DeepSeek config parses `rope_scaling` dictionaries and
+  nested frequency configurations gracefully, and Qwen adapter derives head
+  dimensions for Qwen2.5-MoE checkpoints lacking explicit `head_dim`.
 
 ## 0.1.0 (2026-07-12)
 
