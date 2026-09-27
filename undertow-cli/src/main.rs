@@ -160,6 +160,24 @@ enum Command {
         #[command(subcommand)]
         command: BenchCommand,
     },
+    /// Manage expert usage profiles.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// Merge multiple expert usage profiles into a single profile.
+    Merge {
+        /// Input profile JSON files to merge.
+        #[arg(long = "inputs", required = true, num_args = 1..)]
+        inputs: Vec<PathBuf>,
+        /// Destination path for the merged profile JSON.
+        #[arg(long = "out")]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -430,6 +448,63 @@ fn main() -> Result<()> {
                 margs.export_profile(&*model)?;
             }
         },
+        Command::Profile { command } => match command {
+            ProfileCommand::Merge { inputs, out } => {
+                if inputs.is_empty() {
+                    bail!("at least one input profile is required");
+                }
+                let mut profiles = Vec::with_capacity(inputs.len());
+                for path in &inputs {
+                    let p = undertow_core::ExpertProfile::load(path)
+                        .with_context(|| format!("loading profile from {}", path.display()))?;
+                    profiles.push(p);
+                }
+                let merged = undertow_core::ExpertProfile::merge_all(&profiles)?;
+                merged
+                    .save(&out)
+                    .with_context(|| format!("saving merged profile to {}", out.display()))?;
+                println!(
+                    "Merged {} profiles (arch: {}) -> {} ({} active experts)",
+                    inputs.len(),
+                    merged.architecture,
+                    out.display(),
+                    merged.counts.len()
+                );
+            }
+        },
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_profile_merge_cli() {
+        let cli = Cli::try_parse_from([
+            "undertow",
+            "profile",
+            "merge",
+            "--inputs",
+            "p1.json",
+            "p2.json",
+            "--out",
+            "merged.json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Merge { inputs, out },
+            } => {
+                assert_eq!(
+                    inputs,
+                    vec![PathBuf::from("p1.json"), PathBuf::from("p2.json")]
+                );
+                assert_eq!(out, PathBuf::from("merged.json"));
+            }
+            _ => panic!("expected Profile::Merge command"),
+        }
+    }
 }

@@ -26,6 +26,8 @@ Format follows keepachangelog.com; versions follow semver once published.
   member so the floor is enforced by cargo rather than by convention.
 - Integration test in `undertow-convert` asserting bit-identical output
   shards across varying row chunk sizes (1, 13, and 1024).
+- CLI utility `undertow profile merge` to combine and rank multiple
+  expert usage profiles into a unified hot-expert profile.
 
 ### Fixed
 - Fuzz target `model_config` expanded to cover `MixtralConfig` and `QwenConfig`
