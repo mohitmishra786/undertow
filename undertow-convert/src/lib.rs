@@ -26,7 +26,9 @@ use std::path::Path;
 use undertow_core::{EngineError, QTensor, QuantFormat, Result};
 use undertow_io::{PlannedEntry, ShardWriter, ShardedModelReader};
 
+pub mod gguf;
 pub mod hf;
+pub use gguf::{convert_gguf, is_gguf_file, GgmlDtype, GgufReader};
 pub use hf::{HfClient, HfConfig, HfRemoteSource};
 
 /// Abstraction over local or remote safetensors sources.

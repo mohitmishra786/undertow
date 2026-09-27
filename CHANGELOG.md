@@ -46,6 +46,11 @@ Format follows keepachangelog.com; versions follow semver once published.
   streams shards and safetensors metadata via HTTP range requests and feeds row chunks directly
   through `QTensor::quantize`, writing out local shards atomically without downloading uncompressed
   weights locally.
+- Direct GGUF checkpoint ingestion in `undertow-convert`:
+  `undertow convert --src model.gguf --out <dir>` parses GGUF v2/v3 binary headers, dequantizes
+  Q4_K, Q6_K, Q8_0, Q4_0, F16, BF16, and F32 in bounded row chunks, de-interleaves 3-D expert
+  matrices into per-layer expert shards (`experts-{layer:05}.safetensors`), and synthesizes
+  compatible architecture configuration without intermediate disk expansion.
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`

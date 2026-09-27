@@ -296,6 +296,22 @@ fn main() -> Result<()> {
                     &opts,
                 )
                 .with_context(|| format!("converting remote repo {src}"))?
+            } else if src.ends_with(".gguf") || undertow_convert::is_gguf_file(&src) {
+                let src_path = PathBuf::from(&src);
+                undertow_convert::convert_gguf(
+                    &src_path,
+                    &out,
+                    |dst| {
+                        let c = registry::classifier_for(dst)
+                            .map_err(|e| undertow_core::EngineError::Other(e.to_string()))?;
+                        Ok(Box::new(c)
+                            as Box<
+                                dyn Fn(&str) -> undertow_convert::Disposition + Sync,
+                            >)
+                    },
+                    &opts,
+                )
+                .with_context(|| format!("converting GGUF file {src}"))?
             } else {
                 let src_path = PathBuf::from(&src);
                 let classify = registry::classifier_for(&src_path)?;
