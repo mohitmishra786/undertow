@@ -63,6 +63,8 @@ pub struct QwenMoeConfig {
     pub eos_token_id: Option<serde_json::Value>,
 }
 
+pub type QwenConfig = QwenMoeConfig;
+
 impl QwenMoeConfig {
     pub fn from_dir(dir: impl AsRef<Path>) -> Result<Self> {
         let path = dir.as_ref().join("config.json");
@@ -92,12 +94,15 @@ impl QwenMoeConfig {
                 "inconsistent head geometry".into(),
             ));
         }
-        if self.num_experts == 0 || self.num_experts_per_tok > self.num_experts {
+        if self.num_experts == 0
+            || self.num_experts_per_tok == 0
+            || self.num_experts_per_tok > self.num_experts
+        {
             return Err(EngineError::InvalidConfig(
                 "inconsistent expert counts".into(),
             ));
         }
-        if !self.head_dim.is_multiple_of(2) {
+        if self.head_dim == 0 || !self.head_dim.is_multiple_of(2) {
             return Err(EngineError::InvalidConfig(
                 "head_dim must be even for RoPE".into(),
             ));

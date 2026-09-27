@@ -28,6 +28,9 @@ Format follows keepachangelog.com; versions follow semver once published.
   shards across varying row chunk sizes (1, 13, and 1024).
 
 ### Fixed
+- Fuzz target `model_config` expanded to cover `MixtralConfig` and `QwenConfig`
+  alongside DeepSeek; hardened division and alignment checks in Mixtral and
+  Qwen config parsers against zero counts.
 - safetensors headers with malformed `data_offsets` arrays or overflowing
   shape products are rejected instead of panicking.
 - Chat template rendering is fuel-limited so untrusted templates cannot

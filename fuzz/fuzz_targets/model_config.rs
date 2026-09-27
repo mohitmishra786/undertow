@@ -7,4 +7,6 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let _ = undertow_deepseek_moe::DeepseekConfig::from_slice(data);
+    let _ = undertow_mixtral_moe::MixtralConfig::from_slice(data);
+    let _ = undertow_qwen_moe::QwenMoeConfig::from_slice(data);
 });
