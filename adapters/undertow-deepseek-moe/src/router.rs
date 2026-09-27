@@ -18,6 +18,7 @@
 //! Tie-breaking follows `torch.topk`: lowest index wins.
 
 use undertow_core::adapter::{ExpertChoice, RouterAdapter};
+use undertow_core::router::topk_indices;
 use undertow_quant::sigmoid;
 
 use crate::config::DeepseekConfig;
@@ -42,25 +43,6 @@ impl DeepseekSigmoidRouter {
             norm_topk_prob: cfg.norm_topk_prob,
             routed_scaling_factor: cfg.routed_scaling_factor,
         }
-    }
-}
-
-/// Indices of the `k` largest values, lowest index first on ties
-/// (matches `torch.topk` ordering for distinct ranks).
-fn topk_indices(values: &[f32], k: usize, out: &mut Vec<usize>) {
-    out.clear();
-    for _ in 0..k.min(values.len()) {
-        let mut best: Option<usize> = None;
-        for (i, &v) in values.iter().enumerate() {
-            if out.contains(&i) {
-                continue;
-            }
-            match best {
-                Some(b) if values[b] >= v => {}
-                _ => best = Some(i),
-            }
-        }
-        out.push(best.expect("k <= len"));
     }
 }
 

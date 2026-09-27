@@ -32,6 +32,12 @@ Format follows keepachangelog.com; versions follow semver once published.
   cache budget, expert evictions total, synchronous pread latency histogram,
   and instantaneous decode generation rate.
 
+### Changed
+- Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`
+  optimized from $O(K^2 \cdot N)$ to $O(N \log K)$ via fixed-capacity binary min-heap
+  with zero heap allocations for $K \le 64$, preserving bit-identical `torch.topk`
+  descending rank and lowest-index tie-breaking parity.
+
 ### Fixed
 - Fuzz target `model_config` expanded to cover `MixtralConfig` and `QwenConfig`
   alongside DeepSeek; hardened division and alignment checks in Mixtral and
