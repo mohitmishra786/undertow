@@ -166,6 +166,188 @@ impl Sampler {
         }
         cand[keep - 1].0
     }
+
+    pub fn config(&self) -> &SamplerConfig {
+        &self.cfg
+    }
+
+    pub fn rng_mut(&mut self) -> &mut Pcg32 {
+        &mut self.rng
+    }
+
+    /// Compute full normalized probability distribution over vocabulary
+    /// matching the sampler's temperature, top_k, and top_p settings.
+    pub fn probs(&self, logits: &[f32]) -> Vec<f32> {
+        compute_probs(logits, &self.cfg)
+    }
+
+    /// Sample a token id from an explicit normalized probability distribution.
+    pub fn sample_probs(&mut self, probs: &[f32]) -> usize {
+        sample_from_probs(probs, &mut self.rng)
+    }
+
+    /// Verify a draft token using speculative rejection sampling (Leviathan et al., 2023).
+    pub fn verify_draft(
+        &mut self,
+        draft_token: usize,
+        q_probs: &[f32],
+        p_probs: &[f32],
+    ) -> SpeculativeDecision {
+        speculative_rejection_sample(draft_token, q_probs, p_probs, &mut self.rng)
+    }
+}
+
+/// Decision of speculative rejection sampling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeculativeDecision {
+    /// The draft token is accepted.
+    Accepted,
+    /// The draft token is rejected; includes the replacement token sampled
+    /// from the normalized positive difference distribution:
+    /// `p'(x) = max(0, p(x) - q(x)) / sum_{x'} max(0, p(x') - q(x'))`.
+    Rejected(usize),
+}
+
+/// Compute full normalized probability distribution over vocabulary from logits.
+pub fn compute_probs(logits: &[f32], cfg: &SamplerConfig) -> Vec<f32> {
+    assert!(!logits.is_empty(), "empty logits");
+    let mut out = vec![0.0f32; logits.len()];
+    if cfg.temperature == 0.0 {
+        out[argmax(logits)] = 1.0;
+        return out;
+    }
+
+    let mut cand: Vec<(usize, f32)> = logits
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, l)| !l.is_nan())
+        .collect();
+    if cand.is_empty() {
+        out[0] = 1.0;
+        return out;
+    }
+
+    cand.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    if cfg.top_k > 0 && cfg.top_k < cand.len() {
+        cand.truncate(cfg.top_k);
+    }
+
+    let t = cfg.temperature;
+    let max = cand[0].1;
+    let mut probs: Vec<f32> = cand.iter().map(|(_, l)| ((l - max) / t).exp()).collect();
+    let sum: f32 = probs.iter().sum();
+    if sum > 0.0 {
+        for p in &mut probs {
+            *p /= sum;
+        }
+    }
+
+    let mut keep = probs.len();
+    if cfg.top_p < 1.0 {
+        let mut acc = 0.0f32;
+        for (i, p) in probs.iter().enumerate() {
+            acc += p;
+            if acc >= cfg.top_p {
+                keep = i + 1;
+                break;
+            }
+        }
+    }
+
+    let mass: f32 = probs[..keep].iter().sum();
+    if mass > 0.0 {
+        for i in 0..keep {
+            out[cand[i].0] = probs[i] / mass;
+        }
+    } else {
+        out[cand[0].0] = 1.0;
+    }
+    out
+}
+
+/// Sample a token index from an explicit probability distribution.
+pub fn sample_from_probs(probs: &[f32], rng: &mut Pcg32) -> usize {
+    if probs.is_empty() {
+        return 0;
+    }
+    let mut cand: Vec<(usize, f32)> = probs
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, p)| *p > 0.0 && !p.is_nan())
+        .collect();
+    if cand.is_empty() {
+        return argmax(probs);
+    }
+    cand.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mass: f32 = cand.iter().map(|(_, p)| *p).sum();
+    if mass <= 0.0 {
+        return cand[0].0;
+    }
+    let mut r = rng.uniform() * mass;
+    for &(id, p) in &cand {
+        r -= p;
+        if r <= 0.0 {
+            return id;
+        }
+    }
+    cand.last().map(|&(id, _)| id).unwrap_or(0)
+}
+
+/// Perform speculative rejection sampling (Leviathan et al., 2023).
+///
+/// `draft_token`: the candidate token proposed by the draft model.
+/// `q_probs`: draft model probability distribution over vocabulary.
+/// `p_probs`: base model probability distribution over vocabulary.
+/// `rng`: PCG32 random number generator.
+pub fn speculative_rejection_sample(
+    draft_token: usize,
+    q_probs: &[f32],
+    p_probs: &[f32],
+    rng: &mut Pcg32,
+) -> SpeculativeDecision {
+    let p_draft = p_probs.get(draft_token).copied().unwrap_or(0.0);
+    let q_draft = q_probs.get(draft_token).copied().unwrap_or(0.0);
+
+    let alpha = if q_draft <= 0.0 {
+        if p_draft > 0.0 {
+            0.0
+        } else {
+            1.0
+        }
+    } else {
+        (p_draft / q_draft).min(1.0)
+    };
+
+    let u = rng.uniform();
+    if u < alpha {
+        return SpeculativeDecision::Accepted;
+    }
+
+    // Rejected: sample from normalized positive difference distribution (p(x) - q(x))+
+    let max_len = p_probs.len().max(q_probs.len());
+    let mut diff = vec![0.0f32; max_len];
+    let mut sum_diff = 0.0f32;
+    for (i, item) in diff.iter_mut().enumerate() {
+        let p = p_probs.get(i).copied().unwrap_or(0.0);
+        let q = q_probs.get(i).copied().unwrap_or(0.0);
+        let d = (p - q).max(0.0);
+        *item = d;
+        sum_diff += d;
+    }
+
+    let replacement = if sum_diff > 1e-12 {
+        for d in &mut diff {
+            *d /= sum_diff;
+        }
+        sample_from_probs(&diff, rng)
+    } else {
+        sample_from_probs(p_probs, rng)
+    };
+
+    SpeculativeDecision::Rejected(replacement)
 }
 
 pub fn argmax(v: &[f32]) -> usize {
@@ -279,5 +461,79 @@ mod tests {
         let ones = (0..n).filter(|_| s.sample(&logits) == 1).count();
         let frac = ones as f64 / n as f64;
         assert!((frac - 0.8808).abs() < 0.03, "frac {frac}");
+    }
+
+    #[test]
+    fn greedy_rejection_sampling_matches_argmax() {
+        let mut rng = Pcg32::new(42, 1);
+        let q = [0.0, 1.0, 0.0];
+        let p_match = [0.0, 1.0, 0.0];
+        let p_diff = [0.0, 0.0, 1.0];
+
+        // Matching draft is accepted
+        let d1 = speculative_rejection_sample(1, &q, &p_match, &mut rng);
+        assert_eq!(d1, SpeculativeDecision::Accepted);
+
+        // Mismatched draft is rejected with target's argmax
+        let d2 = speculative_rejection_sample(1, &q, &p_diff, &mut rng);
+        assert_eq!(d2, SpeculativeDecision::Rejected(2));
+    }
+
+    #[test]
+    fn speculative_rejection_sampling_preserves_target_distribution() {
+        let mut rng = Pcg32::new(12345, 6789);
+        let p = [0.10f32, 0.40, 0.30, 0.20];
+        let q = [0.40f32, 0.10, 0.20, 0.30];
+
+        let n = 25000;
+        let mut counts = [0usize; 4];
+        let mut accepted_count = 0usize;
+
+        for _ in 0..n {
+            let draft = sample_from_probs(&q, &mut rng);
+            let final_token = match speculative_rejection_sample(draft, &q, &p, &mut rng) {
+                SpeculativeDecision::Accepted => {
+                    accepted_count += 1;
+                    draft
+                }
+                SpeculativeDecision::Rejected(repl) => repl,
+            };
+            counts[final_token] += 1;
+        }
+
+        // Acceptance rate should roughly equal sum_x min(p(x), q(x)) = 0.1 + 0.1 + 0.2 + 0.2 = 0.60
+        let acceptance_rate = accepted_count as f64 / n as f64;
+        assert!(
+            (acceptance_rate - 0.60).abs() < 0.03,
+            "acceptance rate {acceptance_rate} should be near 0.60"
+        );
+
+        // Emitted token frequencies must match target distribution p
+        for i in 0..4 {
+            let freq = counts[i] as f64 / n as f64;
+            let target = p[i] as f64;
+            assert!(
+                (freq - target).abs() < 0.02,
+                "token {i} frequency {freq} deviates from target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_probs_sums_to_one() {
+        let logits = [1.0, 2.5, -0.5, 0.0, 3.2];
+        let cfg = SamplerConfig {
+            temperature: 0.8,
+            top_p: 0.9,
+            top_k: 3,
+            seed: 42,
+        };
+        let probs = compute_probs(&logits, &cfg);
+        let sum: f32 = probs.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-6);
+
+        // Non-survivors are 0
+        let non_zeros = probs.iter().filter(|&&p| p > 0.0).count();
+        assert!(non_zeros <= 3);
     }
 }

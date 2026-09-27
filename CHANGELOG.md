@@ -38,6 +38,9 @@ Format follows keepachangelog.com; versions follow semver once published.
 - OS buffer cache bypass in `undertow-io`: `F_NOCACHE` enabled by default on macOS
   and `posix_fadvise` page cache invalidation on Linux, preventing RAM page cache
   inflation during multi-thousand token generation runs.
+- Speculative rejection sampling (Leviathan et al., 2023) for MTP speculative decoding
+  under stochastic sampling (temperature > 0, top_p, top_k), preserving the base model's
+  exact probability distribution while enabling `--mtp` with arbitrary sampling configs in the CLI.
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`

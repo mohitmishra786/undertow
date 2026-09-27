@@ -62,6 +62,15 @@ impl SamplingArgs {
         })
         .map_err(|e| anyhow::anyhow!(e))
     }
+
+    fn config(&self) -> SamplerConfig {
+        SamplerConfig {
+            temperature: self.temperature.max(0.0),
+            top_p: self.top_p,
+            top_k: self.top_k,
+            seed: self.seed,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -274,9 +283,6 @@ fn main() -> Result<()> {
             stats,
             mtp,
         } => {
-            if mtp && sampling.temperature != 0.0 {
-                bail!("--mtp requires greedy decoding (temperature 0)");
-            }
             let model = load_model(&margs)?;
             let (ids, tokenizer) = match (&prompt, &prompt_ids) {
                 (Some(text), None) => {
@@ -293,11 +299,17 @@ fn main() -> Result<()> {
             let mut session = model.new_session();
             let n = if mtp {
                 let ds = registry::as_deepseek(&margs.model, &margs.load_options()?)?;
-                let (n, mtp_stats) =
-                    undertow_deepseek_moe::generate_greedy_mtp(&ds, &ids, max_new, &[], |id| {
+                let (n, mtp_stats) = undertow_deepseek_moe::generate_mtp(
+                    &ds,
+                    &ids,
+                    max_new,
+                    sampling.config(),
+                    &[],
+                    |id| {
                         generated.push(id);
                         true
-                    })?;
+                    },
+                )?;
                 eprintln!(
                     "mtp: {}/{} drafts accepted ({:.0}%)",
                     mtp_stats.accepted,

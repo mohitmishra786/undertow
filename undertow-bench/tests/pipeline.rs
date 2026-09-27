@@ -392,6 +392,59 @@ fn speculation_acceptance_path_is_exact() {
     assert_eq!(full, plain, "accepted speculation changed greedy output");
 }
 
+/// Verify that MTP speculative decoding works under stochastic sampling
+/// (temperature > 0, top_p < 1.0) with speculative rejection sampling,
+/// producing deterministic, valid output under a fixed seed.
+#[test]
+fn mtp_speculation_supports_temperature_and_sampling() {
+    use undertow_core::sample::SamplerConfig;
+
+    let reference = load_reference();
+    let model = load_model_with(fixture_dir(), &resident()).unwrap();
+    let max_new = 16;
+    let cfg = SamplerConfig {
+        temperature: 0.8,
+        top_p: 0.9,
+        top_k: 0,
+        seed: 999,
+    };
+
+    let mut run1 = Vec::new();
+    let (n1, stats1) = undertow_deepseek_moe::generate_mtp(
+        &model,
+        &reference.prompt_ids,
+        max_new,
+        cfg,
+        &[],
+        |id| {
+            run1.push(id);
+            true
+        },
+    )
+    .unwrap();
+    assert_eq!(n1, max_new);
+    assert_eq!(run1.len(), max_new);
+    assert!(stats1.drafted > 0);
+
+    // Deterministic under identical seed
+    let mut run2 = Vec::new();
+    let (n2, stats2) = undertow_deepseek_moe::generate_mtp(
+        &model,
+        &reference.prompt_ids,
+        max_new,
+        cfg,
+        &[],
+        |id| {
+            run2.push(id);
+            true
+        },
+    )
+    .unwrap();
+    assert_eq!(n1, n2);
+    assert_eq!(run1, run2);
+    assert_eq!(stats1, stats2);
+}
+
 /// Running out of context mid-generation ends the stream cleanly with the
 /// tokens produced so far, instead of surfacing an error.
 #[test]

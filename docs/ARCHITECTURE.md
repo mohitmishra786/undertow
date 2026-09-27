@@ -42,7 +42,7 @@ Two families of attention live in the tree, each with a compressed per-layer KV 
 
 ## Speculative decoding
 
-DeepSeek-family checkpoints ship a native MTP layer that predicts token t+2 from the last hidden state at t and the embedding of t+1. The engine drafts one token with it and verifies draft plus sampled token in a single two-token prefill; accepted drafts halve the forwards per token, rejected ones roll back one KV position. The property that matters is losslessness: the emitted sequence is decided only by the main model's logits, so output is identical with MTP on or off. Two tests pin this from both sides, one with the oracle's random draft head (everything rejects, output unchanged) and one driving the same loop with a perfect self-consistent draft (everything accepts, output unchanged). Sampling-mode speculation needs rejection sampling to stay lossless and is deliberately not offered until it does.
+DeepSeek-family checkpoints ship a native MTP layer that predicts token t+2 from the last hidden state at t and the embedding of t+1. The engine drafts one token with it and verifies draft plus sampled token in a single two-token prefill; accepted drafts halve the forwards per token, rejected ones roll back one KV position. The property that matters is losslessness: the emitted sequence is decided only by the main model's logits, so output is identical with MTP on or off. Two tests pin this from both sides, one with the oracle's random draft head (everything rejects, output unchanged) and one driving the same loop with a perfect self-consistent draft (everything accepts, output unchanged). Speculation supports both greedy decoding and stochastic sampling with speculative rejection sampling (Leviathan et al., 2023), guaranteeing that the sampled distribution matches the base model's true probabilities under any temperature or top_p.
 
 ## Quantization and conversion
 
@@ -70,4 +70,4 @@ To prevent the OS buffer cache from duplicating or polluting RAM during large ge
 
 ## What is next
 
-Full-size model benchmarks on real NVMe (the only item on this list blocked on hardware rather than code), rejection sampling so MTP speculation works losslessly under temperature, AVX-512 and Intel AMX matrix extensions for high-end x86 workstations, and the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start.
+Full-size model benchmarks on real NVMe (the only item on this list blocked on hardware rather than code), AVX-512 and Intel AMX matrix extensions for high-end x86 workstations, and the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start.

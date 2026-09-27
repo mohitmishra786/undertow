@@ -18,10 +18,11 @@
 //! the main model's logits, so output is identical with MTP on or off,
 //! whatever the draft head predicts. A test pins that invariant.
 //!
-//! Sampling-mode speculation needs rejection sampling to stay lossless and
-//! is not implemented; callers must use MTP with greedy decoding only.
+//! Speculation supports both greedy decoding and stochastic sampling with
+//! speculative rejection sampling (Leviathan et al., 2023), guaranteeing
+//! exact distribution preservation under any temperature or top_p.
 
-use undertow_core::sample::argmax;
+use undertow_core::sample::{argmax, Sampler, SamplerConfig, SpeculativeDecision};
 use undertow_core::{EngineError, QTensor};
 use undertow_quant::rmsnorm;
 
@@ -46,7 +47,7 @@ pub struct MtpHead {
 
 /// Draft-head state for one generation (its own KV cache).
 #[derive(Default)]
-struct MtpState {
+pub struct MtpState {
     kv: LayerKvCache,
     /// Main-model positions whose MTP input has been fed.
     fed: usize,
@@ -69,14 +70,14 @@ impl MtpStats {
 
 /// Feed pending MTP inputs up to the session's current position (using
 /// `next_token` as the not-yet-prefilled continuation) and return the
-/// draft for the token after `next_token`.
-fn draft(
+/// draft logits for the token after `next_token`.
+pub fn draft_logits(
     model: &DeepseekMoeModel,
     mtp: &MtpHead,
     session: &InferenceSession<'_>,
     state: &mut MtpState,
     next_token: usize,
-) -> undertow_core::Result<usize> {
+) -> undertow_core::Result<Vec<f32>> {
     let c = &model.cfg;
     let hidden = c.hidden_size;
     let pos = session.pos;
@@ -128,7 +129,45 @@ fn draft(
     );
     let mut logits = vec![0.0f32; c.vocab_size];
     mtp.head.matvec(&mut logits, &normed);
+    Ok(logits)
+}
+
+pub fn draft(
+    model: &DeepseekMoeModel,
+    mtp: &MtpHead,
+    session: &InferenceSession<'_>,
+    state: &mut MtpState,
+    next_token: usize,
+) -> undertow_core::Result<usize> {
+    let logits = draft_logits(model, mtp, session, state, next_token)?;
     Ok(argmax(&logits))
+}
+
+/// Generation with MTP speculation, supporting both greedy decoding and
+/// speculative rejection sampling under temperature > 0.
+pub fn generate_mtp(
+    model: &DeepseekMoeModel,
+    prompt: &[usize],
+    max_new: usize,
+    sampler_cfg: SamplerConfig,
+    extra_stop_ids: &[usize],
+    on_token: impl FnMut(usize) -> bool,
+) -> undertow_core::Result<(usize, MtpStats)> {
+    let Some(mtp) = &model.mtp else {
+        return Err(EngineError::Other(
+            "model has no MTP head; use plain generation".into(),
+        ));
+    };
+    let mut state = MtpState::default();
+    speculative_loop_with_sampler(
+        model,
+        prompt,
+        max_new,
+        sampler_cfg,
+        extra_stop_ids,
+        on_token,
+        |sess, next| draft_logits(model, mtp, sess, &mut state, next),
+    )
 }
 
 /// Greedy generation with MTP speculation. Semantics identical to
@@ -141,20 +180,80 @@ pub fn generate_greedy_mtp(
     extra_stop_ids: &[usize],
     on_token: impl FnMut(usize) -> bool,
 ) -> undertow_core::Result<(usize, MtpStats)> {
-    let Some(mtp) = &model.mtp else {
-        return Err(EngineError::Other(
-            "model has no MTP head; use plain generation".into(),
-        ));
-    };
-    let mut state = MtpState::default();
-    speculative_loop(
+    generate_mtp(
         model,
         prompt,
         max_new,
+        SamplerConfig::greedy(),
         extra_stop_ids,
         on_token,
-        |sess, next| draft(model, mtp, sess, &mut state, next),
     )
+}
+
+/// Speculative decoding loop with an arbitrary draft logits source and rejection sampling.
+pub fn speculative_loop_with_sampler(
+    model: &DeepseekMoeModel,
+    prompt: &[usize],
+    max_new: usize,
+    sampler_cfg: SamplerConfig,
+    extra_stop_ids: &[usize],
+    mut on_token: impl FnMut(usize) -> bool,
+    mut draft_logits_fn: impl FnMut(&InferenceSession<'_>, usize) -> undertow_core::Result<Vec<f32>>,
+) -> undertow_core::Result<(usize, MtpStats)> {
+    sampler_cfg.validate().map_err(EngineError::Other)?;
+    let is_stop = |id: usize| model.stop_ids.contains(&id) || extra_stop_ids.contains(&id);
+
+    let mut session = model.session();
+    let mut stats = MtpStats::default();
+    let mut sampler = Sampler::new(sampler_cfg).map_err(EngineError::Other)?;
+
+    let logits = session.prefill(prompt)?;
+    let mut next = sampler.sample(logits.row(prompt.len() - 1));
+    let mut produced = 0usize;
+    loop {
+        produced += 1;
+        let keep_going = on_token(next);
+        if is_stop(next) || !keep_going || produced >= max_new {
+            break;
+        }
+
+        let draft_l = draft_logits_fn(&session, next)?;
+        stats.drafted += 1;
+
+        let q_probs = sampler.probs(&draft_l);
+        let drafted = sampler.sample_probs(&q_probs);
+
+        let pos_before = session.pos;
+        let verify = match session.prefill(&[next, drafted]) {
+            Ok(v) => v,
+            // Not enough context left for the two-token verify: end the
+            // stream cleanly with what was already emitted.
+            Err(EngineError::ContextOverflow { .. }) => break,
+            Err(e) => return Err(e),
+        };
+
+        let p_probs = sampler.probs(verify.row(0));
+        let decision = sampler.verify_draft(drafted, &q_probs, &p_probs);
+
+        match decision {
+            SpeculativeDecision::Accepted => {
+                stats.accepted += 1;
+                produced += 1;
+                let keep_going = on_token(drafted);
+                if is_stop(drafted) || !keep_going || produced >= max_new {
+                    break;
+                }
+                next = sampler.sample(verify.row(1));
+            }
+            SpeculativeDecision::Rejected(replacement) => {
+                // The draft's KV position is wrong; roll it back. `next`'s
+                // position (pos_before) is real and stays.
+                session.truncate(pos_before + 1);
+                next = replacement;
+            }
+        }
+    }
+    Ok((produced, stats))
 }
 
 /// Greedy speculation with an arbitrary draft source: one verified token
