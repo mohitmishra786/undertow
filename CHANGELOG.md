@@ -41,6 +41,11 @@ Format follows keepachangelog.com; versions follow semver once published.
 - Speculative rejection sampling (Leviathan et al., 2023) for MTP speculative decoding
   under stochastic sampling (temperature > 0, top_p, top_k), preserving the base model's
   exact probability distribution while enabling `--mtp` with arbitrary sampling configs in the CLI.
+- Hugging Face Hub direct streaming ingestion in `undertow-convert`:
+  `undertow convert --src hf:<repo_id> [--hf-token <token>] [--hf-revision <rev>] --out <dir>`
+  streams shards and safetensors metadata via HTTP range requests and feeds row chunks directly
+  through `QTensor::quantize`, writing out local shards atomically without downloading uncompressed
+  weights locally.
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`

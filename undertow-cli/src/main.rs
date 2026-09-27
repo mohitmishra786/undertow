@@ -77,12 +77,21 @@ impl SamplingArgs {
 enum Command {
     /// Quantize an HF checkpoint into a streaming undertow checkpoint.
     Convert {
-        /// Source model directory (config.json + safetensors).
+        /// Source model directory (config.json + safetensors) or Hugging Face repo (e.g. hf:deepseek-ai/DeepSeek-V3).
         #[arg(long)]
-        src: PathBuf,
+        src: String,
         /// Output directory.
         #[arg(long)]
         out: PathBuf,
+        /// Hugging Face API token (env: HF_TOKEN).
+        #[arg(long, env = "HF_TOKEN")]
+        hf_token: Option<String>,
+        /// Hugging Face revision / branch / commit.
+        #[arg(long, default_value = "main")]
+        hf_revision: String,
+        /// Hugging Face endpoint / base URL (env: HF_ENDPOINT).
+        #[arg(long, env = "HF_ENDPOINT")]
+        hf_endpoint: Option<String>,
         /// Routed-expert format: int4, int8 or f32.
         #[arg(long, default_value = "int4")]
         experts: String,
@@ -248,6 +257,9 @@ fn main() -> Result<()> {
         Command::Convert {
             src,
             out,
+            hf_token,
+            hf_revision,
+            hf_endpoint,
             experts,
             dense,
             row_chunk,
@@ -260,9 +272,36 @@ fn main() -> Result<()> {
                 force,
             };
             let t0 = Instant::now();
-            let classify = registry::classifier_for(&src)?;
-            let report = undertow_convert::convert(&src, &out, &classify, &opts)
-                .with_context(|| format!("converting {}", src.display()))?;
+            let report = if let Some(repo_id) = src
+                .strip_prefix("hf:")
+                .or_else(|| src.strip_prefix("hf://"))
+            {
+                let mut hf_config = undertow_convert::HfConfig::new(repo_id)
+                    .with_token(hf_token)
+                    .with_revision(hf_revision);
+                if let Some(ep) = hf_endpoint {
+                    hf_config = hf_config.with_endpoint(ep);
+                }
+                undertow_convert::convert_hf_with_resolver(
+                    hf_config,
+                    &out,
+                    |dst| {
+                        let c = registry::classifier_for(dst)
+                            .map_err(|e| undertow_core::EngineError::Other(e.to_string()))?;
+                        Ok(Box::new(c)
+                            as Box<
+                                dyn Fn(&str) -> undertow_convert::Disposition + Sync,
+                            >)
+                    },
+                    &opts,
+                )
+                .with_context(|| format!("converting remote repo {src}"))?
+            } else {
+                let src_path = PathBuf::from(&src);
+                let classify = registry::classifier_for(&src_path)?;
+                undertow_convert::convert(&src_path, &out, &classify, &opts)
+                    .with_context(|| format!("converting {}", src_path.display()))?
+            };
             println!(
                 "converted {} tensors into {} shards ({} skipped as already complete)",
                 report.tensors, report.shards_written, report.shards_skipped

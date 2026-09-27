@@ -234,7 +234,8 @@ impl SafetensorsReader {
         let offset = info.offset + (row_start * in_dim * elem) as u64;
         let mut raw = vec![0u8; nrows * in_dim * elem];
         read_exact_at(&self.file, &mut raw, offset, self.nocache)?;
-        let data = decode_f32(&raw, info.dtype, name, &self.path)?;
+        let path_str = self.path.display().to_string();
+        let data = decode_f32(&raw, info.dtype, name, &path_str)?;
         Ok(Tensor::new(vec![nrows, in_dim], data))
     }
 
@@ -242,12 +243,13 @@ impl SafetensorsReader {
     pub fn read_f32(&self, name: &str) -> Result<Tensor> {
         let info = self.info(name)?.clone();
         let raw = self.read_raw(name)?;
-        let data = decode_f32(&raw, info.dtype, name, &self.path)?;
+        let path_str = self.path.display().to_string();
+        let data = decode_f32(&raw, info.dtype, name, &path_str)?;
         Ok(Tensor::new(info.shape, data))
     }
 }
 
-fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, path: &Path) -> Result<Vec<f32>> {
+pub fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, ctx: &str) -> Result<Vec<f32>> {
     Ok(match dtype {
         Dtype::F32 => {
             let (words, _) = raw.as_chunks::<4>();
@@ -269,8 +271,7 @@ fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, path: &Path) -> Result<Vec<f
         }
         other => {
             return Err(EngineError::Other(format!(
-                "{}: cannot convert {other:?} tensor {name} to f32",
-                path.display()
+                "{ctx}: cannot convert {other:?} tensor {name} to f32"
             )))
         }
     })

@@ -48,7 +48,7 @@ DeepSeek-family checkpoints ship a native MTP layer that predicts token t+2 from
 
 `QTensor` stores f32, int8 or int4 with symmetric per-output-row scales; kernels dequantize inside the accumulation loop. Per-row scales make the converter's row-chunked streaming exact: quantizing in chunks of any size produces byte-identical output, and a test pins that. Numerically sensitive tensors never quantize: norms, router gates, biases, anything not a 2-D matrix. Each family ships its own conversion classifier, each with its own version of the same trap under test (the router's `.mlp.gate.weight` one substring from the very quantizable `.mlp.gate_proj.weight`).
 
-`undertow convert` streams any supported checkpoint (f32, bf16, f16, sharded or not) into per-layer expert shards plus a dense shard, with a standard index json so one reader opens converted and unconverted models alike. Constant memory regardless of model size, atomic per-shard writes, resumable reruns, and a hard refusal on non-finite weights.
+`undertow convert` streams any supported checkpoint (f32, bf16, f16, sharded or not; local directory or streaming remotely directly from Hugging Face Hub via `--src hf:<repo_id>`) into per-layer expert shards plus a dense shard, with a standard index json so one reader opens converted and unconverted models alike. Constant memory regardless of model size, atomic per-shard writes, resumable reruns, and a hard refusal on non-finite weights. Direct HF streaming uses HTTP range requests to download only needed row chunks and quantizes in flight without requiring 1.3 TB+ of local uncompressed staging storage.
 
 ## How correctness is established
 

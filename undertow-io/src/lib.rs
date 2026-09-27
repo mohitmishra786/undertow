@@ -16,8 +16,8 @@ mod store;
 mod writer;
 
 pub use reader::{
-    parse_header, read_qtensor, set_file_nocache, Dtype, SafetensorsReader, ShardedModelReader,
-    TensorInfo,
+    decode_f32, parse_header, read_qtensor, set_file_nocache, Dtype, SafetensorsReader,
+    ShardedModelReader, TensorInfo,
 };
 pub use store::{DiskExpertStore, ExpertDims};
 pub use writer::{
