@@ -8,10 +8,12 @@
 #![cfg(all(target_arch = "x86_64", not(miri)))]
 #![allow(clippy::incompatible_msrv)]
 
+#[cfg(has_avx512)]
 use std::arch::x86_64::*;
 
 /// Check if AVX-512 Foundation, Byte/Word, Doubleword/Quadword, and Vector Length
 /// extensions are available.
+#[cfg(has_avx512)]
 pub fn avx512_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
@@ -23,11 +25,13 @@ pub fn avx512_available() -> bool {
 }
 
 /// Check if AVX-512 Vector Neural Network Instructions (VNNI, e.g. VPDPBUSD) are available.
+#[cfg(has_avx512)]
 pub fn avx512vnni_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| avx512_available() && is_x86_feature_detected!("avx512vnni"))
 }
 
+#[cfg(has_avx512)]
 #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl")]
 unsafe fn dot_f32(x: &[f32], w: &[f32], n: usize) -> f32 {
     let mut acc0 = _mm512_setzero_ps();
@@ -53,6 +57,7 @@ unsafe fn dot_f32(x: &[f32], w: &[f32], n: usize) -> f32 {
     acc
 }
 
+#[cfg(has_avx512)]
 #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl")]
 unsafe fn dot_i8(x: &[f32], q: &[i8], n: usize) -> f32 {
     let mut acc0 = _mm512_setzero_ps();
@@ -83,6 +88,7 @@ unsafe fn dot_i8(x: &[f32], q: &[i8], n: usize) -> f32 {
 /// 32-bit integers. Since symmetric activation quantization produces signed values in
 /// `[-127, 127]`, adding 128 shifts the domain to `[1, 255]`. The resulting dot product is:
 /// `sum(a * w) = sum((a + 128) * w) - 128 * sum(w)`.
+#[cfg(has_avx512)]
 #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl,avx512vnni")]
 unsafe fn dot_i8_vnni(a: &[i8], b: &[i8], n: usize) -> i32 {
     let mut acc = _mm512_setzero_si512();
@@ -107,6 +113,7 @@ unsafe fn dot_i8_vnni(a: &[i8], b: &[i8], n: usize) -> i32 {
     res
 }
 
+#[cfg(has_avx512)]
 #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl")]
 unsafe fn dot_i4(x: &[f32], packed: &[u8], n: usize) -> f32 {
     let mut acc0 = _mm512_setzero_ps();
@@ -148,6 +155,7 @@ unsafe fn dot_i4(x: &[f32], packed: &[u8], n: usize) -> f32 {
     acc
 }
 
+#[cfg(has_avx512)]
 macro_rules! rowwise {
     ($dot:ident, $out:ident, $x:ident, $rows:expr, $scales:expr, $seq:ident, $id:ident, $od:ident, $row_len:expr) => {
         for s in 0..$seq {
@@ -162,6 +170,7 @@ macro_rules! rowwise {
     };
 }
 
+#[cfg(has_avx512)]
 pub fn matmul_f32(
     out: &mut [f32],
     x: &[f32],
@@ -184,6 +193,7 @@ pub fn matmul_f32(
     );
 }
 
+#[cfg(has_avx512)]
 pub fn matmul_i8(
     out: &mut [f32],
     x: &[f32],
@@ -207,6 +217,7 @@ pub fn matmul_i8(
     );
 }
 
+#[cfg(has_avx512)]
 pub fn matmul_i8_vnni(
     out: &mut [f32],
     x: &[f32],
@@ -230,6 +241,7 @@ pub fn matmul_i8_vnni(
     }
 }
 
+#[cfg(has_avx512)]
 pub fn matmul_i4(
     out: &mut [f32],
     x: &[f32],
@@ -254,7 +266,68 @@ pub fn matmul_i4(
     );
 }
 
-#[cfg(test)]
+#[cfg(not(has_avx512))]
+pub fn avx512_available() -> bool {
+    false
+}
+
+#[cfg(not(has_avx512))]
+pub fn avx512vnni_available() -> bool {
+    false
+}
+
+#[cfg(not(has_avx512))]
+pub fn matmul_f32(
+    _out: &mut [f32],
+    _x: &[f32],
+    _w: &[f32],
+    _seq: usize,
+    _in_dim: usize,
+    _out_dim: usize,
+) {
+    unreachable!("AVX-512 not compiled on this rustc version");
+}
+
+#[cfg(not(has_avx512))]
+pub fn matmul_i8(
+    _out: &mut [f32],
+    _x: &[f32],
+    _q: &[i8],
+    _scales: &[f32],
+    _seq: usize,
+    _in_dim: usize,
+    _out_dim: usize,
+) {
+    unreachable!("AVX-512 not compiled on this rustc version");
+}
+
+#[cfg(not(has_avx512))]
+pub fn matmul_i8_vnni(
+    _out: &mut [f32],
+    _x: &[f32],
+    _q: &[i8],
+    _scales: &[f32],
+    _seq: usize,
+    _in_dim: usize,
+    _out_dim: usize,
+) {
+    unreachable!("AVX-512 VNNI not compiled on this rustc version");
+}
+
+#[cfg(not(has_avx512))]
+pub fn matmul_i4(
+    _out: &mut [f32],
+    _x: &[f32],
+    _packed: &[u8],
+    _scales: &[f32],
+    _seq: usize,
+    _in_dim: usize,
+    _out_dim: usize,
+) {
+    unreachable!("AVX-512 not compiled on this rustc version");
+}
+
+#[cfg(all(test, has_avx512))]
 mod tests {
     use crate::{QTensor, QuantFormat};
 

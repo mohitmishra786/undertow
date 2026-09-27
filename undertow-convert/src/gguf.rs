@@ -288,6 +288,7 @@ pub struct GgufTensorEntry {
 }
 
 pub struct GgufReader {
+    #[allow(dead_code)]
     file: File,
     #[allow(dead_code)]
     path: PathBuf,

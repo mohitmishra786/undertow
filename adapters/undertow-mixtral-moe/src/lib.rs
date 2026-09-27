@@ -68,11 +68,9 @@ impl MixtralConfig {
     }
 
     pub fn head_dim(&self) -> usize {
-        if self.num_attention_heads == 0 {
-            0
-        } else {
-            self.hidden_size / self.num_attention_heads
-        }
+        self.hidden_size
+            .checked_div(self.num_attention_heads)
+            .unwrap_or(0)
     }
 
     fn validate(&self) -> Result<()> {

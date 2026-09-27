@@ -76,8 +76,10 @@ impl QwenMoeConfig {
     pub fn from_slice(bytes: &[u8]) -> Result<Self> {
         let mut cfg: Self =
             serde_json::from_slice(bytes).map_err(|e| EngineError::InvalidConfig(e.to_string()))?;
-        if cfg.head_dim == 0 && cfg.num_attention_heads > 0 {
-            cfg.head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        if cfg.head_dim == 0 {
+            if let Some(dim) = cfg.hidden_size.checked_div(cfg.num_attention_heads) {
+                cfg.head_dim = dim;
+            }
         }
         cfg.validate()?;
         Ok(cfg)
