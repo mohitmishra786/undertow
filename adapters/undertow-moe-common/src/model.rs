@@ -16,6 +16,7 @@ use undertow_core::{EngineError, QTensor, Result, StoreStatsSnapshot, Tensor, Ti
 use undertow_io::{read_qtensor, DiskExpertStore, ExpertDims, ShardedModelReader};
 use undertow_quant::{matmul, rmsnorm, silu};
 
+use crate::deltanet::{deltanet_forward_cached, DeltaNetDims, DeltaNetState, DeltaNetWeights};
 use crate::gqa::{gqa_forward_cached, GqaDims, GqaKvCache, GqaWeights};
 
 #[derive(Debug, Clone)]
@@ -89,10 +90,51 @@ pub enum Ffn {
     },
 }
 
+pub enum AttentionWeights {
+    Gqa(Box<GqaWeights>),
+    DeltaNet {
+        weights: Box<DeltaNetWeights>,
+        dims: DeltaNetDims,
+    },
+}
+
+impl From<GqaWeights> for AttentionWeights {
+    fn from(w: GqaWeights) -> Self {
+        Self::Gqa(Box::new(w))
+    }
+}
+
+pub enum LayerAttentionState {
+    Gqa(GqaKvCache),
+    DeltaNet(DeltaNetState),
+}
+
+impl LayerAttentionState {
+    pub fn nbytes(&self) -> usize {
+        match self {
+            Self::Gqa(c) => c.nbytes(),
+            Self::DeltaNet(s) => s.nbytes(),
+        }
+    }
+
+    pub fn truncate(&mut self, len: usize, d: &GqaDims) {
+        match self {
+            Self::Gqa(c) => c.truncate(len, d),
+            Self::DeltaNet(s) => {
+                if len == 0 {
+                    s.reset();
+                } else {
+                    s.len = s.len.min(len);
+                }
+            }
+        }
+    }
+}
+
 pub struct Layer {
     pub input_norm: Vec<f32>,
     pub post_attn_norm: Vec<f32>,
-    pub attn: GqaWeights,
+    pub attn: AttentionWeights,
     pub ffn: Ffn,
 }
 
@@ -223,11 +265,19 @@ impl GqaMoeModel {
     }
 
     pub fn session(&self) -> GqaSession<'_> {
+        let kv = self
+            .layers
+            .iter()
+            .map(|l| match &l.attn {
+                AttentionWeights::Gqa(_) => LayerAttentionState::Gqa(GqaKvCache::default()),
+                AttentionWeights::DeltaNet { dims, .. } => {
+                    LayerAttentionState::DeltaNet(DeltaNetState::new(dims))
+                }
+            })
+            .collect();
         GqaSession {
             model: self,
-            kv: (0..self.spec.num_layers)
-                .map(|_| GqaKvCache::default())
-                .collect(),
+            kv,
             pos: 0,
         }
     }
@@ -248,7 +298,7 @@ impl GqaMoeModel {
 
 pub struct GqaSession<'m> {
     model: &'m GqaMoeModel,
-    kv: Vec<GqaKvCache>,
+    kv: Vec<LayerAttentionState>,
     pos: usize,
 }
 
@@ -288,9 +338,24 @@ impl GqaSession<'_> {
                     s.dims.rms_eps,
                 );
             }
-            let attn = gqa_forward_cached(&s.dims, &layer.attn, &normed, seq, &mut self.kv[li]);
-            for (xv, av) in x.iter_mut().zip(&attn) {
-                *xv += av;
+            match (&layer.attn, &mut self.kv[li]) {
+                (AttentionWeights::Gqa(w), LayerAttentionState::Gqa(cache)) => {
+                    let attn = gqa_forward_cached(&s.dims, w, &normed, seq, cache);
+                    for (xv, av) in x.iter_mut().zip(&attn) {
+                        *xv += av;
+                    }
+                }
+                (
+                    AttentionWeights::DeltaNet { weights, dims },
+                    LayerAttentionState::DeltaNet(state),
+                ) => {
+                    let mut attn = vec![0.0f32; seq * hidden];
+                    deltanet_forward_cached(&normed, seq, state, weights, dims, &mut attn);
+                    for (xv, av) in x.iter_mut().zip(&attn) {
+                        *xv += av;
+                    }
+                }
+                _ => unreachable!("layer attention weights and state mismatch"),
             }
             if single && li + 1 < m.layers.len() {
                 m.pilot_prefetch(li + 1, &x);
@@ -526,7 +591,7 @@ pub fn load_gqa_model(
         layers.push(Layer {
             input_norm,
             post_attn_norm,
-            attn,
+            attn: attn.into(),
             ffn,
         });
     }

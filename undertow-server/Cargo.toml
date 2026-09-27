@@ -22,4 +22,4 @@ tracing = "0.1"
 [dev-dependencies]
 undertow-deepseek-moe.workspace = true
 undertow-tokenizer.workspace = true
-reqwest = { version = "0.13", features = ["json", "blocking"] }
+reqwest.workspace = true

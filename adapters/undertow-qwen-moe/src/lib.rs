@@ -40,7 +40,8 @@ pub struct QwenMoeConfig {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
-    /// Explicit per-head dim (decoupled from hidden/heads in Qwen3).
+    /// Explicit per-head dim (decoupled from hidden/heads in Qwen3; defaults to hidden/heads in Qwen2.5).
+    #[serde(default)]
     pub head_dim: usize,
     pub num_experts: usize,
     pub num_experts_per_tok: usize,
@@ -62,11 +63,24 @@ pub struct QwenMoeConfig {
     pub eos_token_id: Option<serde_json::Value>,
 }
 
+pub type QwenConfig = QwenMoeConfig;
+
 impl QwenMoeConfig {
     pub fn from_dir(dir: impl AsRef<Path>) -> Result<Self> {
         let path = dir.as_ref().join("config.json");
-        let cfg: Self = serde_json::from_slice(&std::fs::read(&path)?)
-            .map_err(|e| EngineError::InvalidConfig(format!("{}: {e}", path.display())))?;
+        let bytes = std::fs::read(&path)?;
+        Self::from_slice(&bytes)
+            .map_err(|e| EngineError::InvalidConfig(format!("{}: {e}", path.display())))
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
+        let mut cfg: Self =
+            serde_json::from_slice(bytes).map_err(|e| EngineError::InvalidConfig(e.to_string()))?;
+        if cfg.head_dim == 0 {
+            if let Some(dim) = cfg.hidden_size.checked_div(cfg.num_attention_heads) {
+                cfg.head_dim = dim;
+            }
+        }
         cfg.validate()?;
         Ok(cfg)
     }
@@ -82,12 +96,15 @@ impl QwenMoeConfig {
                 "inconsistent head geometry".into(),
             ));
         }
-        if self.num_experts == 0 || self.num_experts_per_tok > self.num_experts {
+        if self.num_experts == 0
+            || self.num_experts_per_tok == 0
+            || self.num_experts_per_tok > self.num_experts
+        {
             return Err(EngineError::InvalidConfig(
                 "inconsistent expert counts".into(),
             ));
         }
-        if !self.head_dim.is_multiple_of(2) {
+        if self.head_dim == 0 || !self.head_dim.is_multiple_of(2) {
             return Err(EngineError::InvalidConfig(
                 "head_dim must be even for RoPE".into(),
             ));
@@ -282,5 +299,29 @@ mod tests {
         for n in names {
             assert_eq!(classify_tensor(&n), Disposition::Expert { layer: 11 });
         }
+    }
+
+    #[test]
+    fn parse_qwen2_moe_config_without_explicit_head_dim() {
+        let json = serde_json::json!({
+            "vocab_size": 151936,
+            "hidden_size": 2048,
+            "intermediate_size": 5632,
+            "moe_intermediate_size": 1408,
+            "num_hidden_layers": 24,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 16,
+            "num_experts": 64,
+            "num_experts_per_tok": 8,
+            "norm_topk_prob": true,
+            "decoder_sparse_step": 1,
+            "rope_theta": 1000000.0,
+            "rms_norm_eps": 1e-6,
+            "max_position_embeddings": 32768,
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let cfg = QwenMoeConfig::from_slice(&bytes).unwrap();
+        // 2048 / 16 = 128
+        assert_eq!(cfg.head_dim, 128);
     }
 }

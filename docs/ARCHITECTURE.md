@@ -8,7 +8,7 @@ This is a description of what is actually built and why it has the shape it has.
   <img src="../assets/crates.svg" width="700" alt="Crate layering">
 </p>
 
-`undertow-quant` sits at the bottom: quantized weight storage, scalar reference kernels, and NEON implementations that are property-tested against the scalar ones (the scalar path stays the source of truth on every platform). `undertow-core` owns the trait vocabulary plus everything every frontend shares: the caches, sampling, memory detection, hot-expert profiles, and the family-agnostic `Model` and `Session` traits the CLI and server drive inference through. Adapters live one crate per architecture family; Mixtral and Qwen3-MoE share their forward pass through `undertow-moe-common` because they differ only in naming, router normalization and two attention details. The runtime never branches on a model name; the CLI's registry maps `config.json` `model_type` to an adapter, and that is the only place family names appear together.
+`undertow-quant` sits at the bottom: quantized weight storage, scalar reference kernels, and SIMD implementations (NEON on aarch64, AVX2+FMA on x86_64 with runtime feature detection) that are property-tested against the scalar ones (the scalar path stays the source of truth on every platform). `undertow-core` owns the trait vocabulary plus everything every frontend shares: the caches, sampling, memory detection, hot-expert profiles, and the family-agnostic `Model` and `Session` traits the CLI and server drive inference through. Adapters live one crate per architecture family; Mixtral and Qwen3-MoE share their forward pass through `undertow-moe-common` because they differ only in naming, router normalization and two attention details. The runtime never branches on a model name; the CLI's registry maps `config.json` `model_type` to an adapter, and that is the only place family names appear together.
 
 ## The two traits that matter
 
@@ -34,27 +34,29 @@ The invariant the whole tier design hangs on, and the test I consider the most i
 
 ## Attention
 
-Two families of attention live in the tree, each with a compressed per-layer KV cache and incremental decode validated against one-shot forward.
+Three families of attention live in the tree, each with compressed per-layer cache states and incremental decode validated against one-shot forward.
 
 **MLA** (DeepSeek family) caches only the RMSNormed KV latent and the shared RoPEd key-rot vector: `kv_lora_rank + qk_rope_head_dim` floats per token per layer, a factor of about 57 less than full KV on GLM-5.2 class geometry. Prefill reconstructs k/v through `kv_b_proj` in one matmul; single-token decode uses weight absorption, folding `q_nope` through the K half of `kv_b` so scores read cached latents directly. Same math by linearity, tested against each other with quantized `kv_b` as well as f32, because absorption traverses the quantized matrix in a completely different access pattern and that is where a packing bug would hide. RoPE is the interleaved partial variant matching `transformers`' `apply_rotary_pos_emb_interleave`.
 
 **GQA** (Mixtral, Qwen) caches roped keys and values per KV head, with NeoX full-dim RoPE, optional per-head q/k RMSNorm (Qwen3), and an optional sliding window (Mixtral). The equivalence tests sweep KV-head counts including multi-query, both norm settings, and window edge cases.
 
+**Gated DeltaNet & Hybrid Linear Attention** (Qwen3.5/3.8, Kimi K3, GLM-5.3) maintains a constant $O(1)$ memory complexity per token ($d_v \times d_k$ matrix per head) using causal linear recurrence with delta-rule value correction and output gating ($S_t = \alpha_t S_{t-1} + \beta_t (v_t - S_{t-1} k_t) k_t^T$, $y_t = (S_t q_t) \odot \text{silu}(g_t)$). Hybrid sequencing dynamically alternates between full attention and linear recurrence layers according to model architecture configuration.
+
 ## Speculative decoding
 
-DeepSeek-family checkpoints ship a native MTP layer that predicts token t+2 from the last hidden state at t and the embedding of t+1. The engine drafts one token with it and verifies draft plus sampled token in a single two-token prefill; accepted drafts halve the forwards per token, rejected ones roll back one KV position. The property that matters is losslessness: the emitted sequence is decided only by the main model's logits, so output is identical with MTP on or off. Two tests pin this from both sides, one with the oracle's random draft head (everything rejects, output unchanged) and one driving the same loop with a perfect self-consistent draft (everything accepts, output unchanged). Sampling-mode speculation needs rejection sampling to stay lossless and is deliberately not offered until it does.
+DeepSeek-family checkpoints ship a native MTP layer that predicts token t+2 from the last hidden state at t and the embedding of t+1. The engine drafts one token with it and verifies draft plus sampled token in a single two-token prefill; accepted drafts halve the forwards per token, rejected ones roll back one KV position. The property that matters is losslessness: the emitted sequence is decided only by the main model's logits, so output is identical with MTP on or off. Two tests pin this from both sides, one with the oracle's random draft head (everything rejects, output unchanged) and one driving the same loop with a perfect self-consistent draft (everything accepts, output unchanged). Speculation supports both greedy decoding and stochastic sampling with speculative rejection sampling (Leviathan et al., 2023), guaranteeing that the sampled distribution matches the base model's true probabilities under any temperature or top_p.
 
 ## Quantization and conversion
 
 `QTensor` stores f32, int8 or int4 with symmetric per-output-row scales; kernels dequantize inside the accumulation loop. Per-row scales make the converter's row-chunked streaming exact: quantizing in chunks of any size produces byte-identical output, and a test pins that. Numerically sensitive tensors never quantize: norms, router gates, biases, anything not a 2-D matrix. Each family ships its own conversion classifier, each with its own version of the same trap under test (the router's `.mlp.gate.weight` one substring from the very quantizable `.mlp.gate_proj.weight`).
 
-`undertow convert` streams any supported checkpoint (f32, bf16, f16, sharded or not) into per-layer expert shards plus a dense shard, with a standard index json so one reader opens converted and unconverted models alike. Constant memory regardless of model size, atomic per-shard writes, resumable reruns, and a hard refusal on non-finite weights.
+`undertow convert` streams any supported checkpoint (f32, bf16, f16, sharded or not; local safetensors directories, direct GGUF files via `--src model.gguf` with on-the-fly Q4_K/Q6_K/Q8_0/Q4_0 dequantization and 3-D expert de-interleaving, or streaming remotely directly from Hugging Face Hub via `--src hf:<repo_id>`) into per-layer expert shards plus a dense shard, with a standard index json so one reader opens converted and unconverted models alike. Constant memory regardless of model size, atomic per-shard writes, resumable reruns, and a hard refusal on non-finite weights. Direct HF streaming uses HTTP range requests to download only needed row chunks and quantizes in flight without requiring 1.3 TB+ of local uncompressed staging storage.
 
 ## How correctness is established
 
 The anchor is a set of tiny random-weight checkpoints, one per family, each with the real architecture (dense prefixes, q-LoRA, expert groups, shared experts, q/k norms, an MTP layer) generated by a libm-free deterministic RNG so fixtures and golden references live in git. Each was run once through the upstream `transformers` implementation; the Rust forward pass must match teacher-forcing argmax at every position and the greedy continuation token for token, with max logit error near 1e-6.
 
-Everything else is tested relative to that anchor, in a chain: quantized kernels against dequantized reference matmuls, NEON against scalar, chunked conversion against whole-tensor, incremental against one-shot, absorbed against reconstructed, streaming against resident, MTP against plain greedy, server streaming against server unary. Drift tests regenerate every fixture and byte-compare, so a generator change cannot silently invalidate a golden file.
+Everything else is tested relative to that anchor, in a chain: quantized kernels against dequantized reference matmuls, SIMD (NEON, AVX2, and AVX-512) against scalar, chunked conversion against whole-tensor, incremental against one-shot, absorbed against reconstructed, streaming against resident, MTP against plain greedy, server streaming against server unary. Drift tests regenerate every fixture and byte-compare, so a generator change cannot silently invalidate a golden file.
 
 ## The server
 
@@ -64,6 +66,10 @@ Everything else is tested relative to that anchor, in a chain: quantized kernels
 
 With a 350 to 600 GB expert pool behind an 8 to 64 GB RAM budget, mmap hands residency decisions to the page cache, and RSS becomes something that happens to you rather than something you chose. That failure mode is worst on exactly the unified-memory machines this engine targets. Positioned reads into buffers we own keep RSS flat and leave residency to the cache policy. They are also offset-stateless, so concurrent expert fetches never fight over a shared file cursor; the concurrency tests lean on that directly.
 
+To prevent the OS buffer cache from duplicating or polluting RAM during large generation runs, `undertow-io` bypasses kernel page caching by default:
+- On macOS (Darwin/Apple Silicon), shard file descriptors are configured with `fcntl(fd, F_NOCACHE, 1)` at open, preventing XNU unified memory page compression and cache bloat.
+- On Linux, read ranges are managed with `posix_fadvise(..., POSIX_FADV_DONTNEED)` and random access flags to promptly release kernel pages after reading.
+
 ## What is next
 
-Full-size model benchmarks on real NVMe (the only item on this list blocked on hardware rather than code), rejection sampling so MTP speculation works losslessly under temperature, AVX2 kernels for x86, and the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start.
+Full-size model benchmarks (DeepSeek-V3 671B and Qwen3-MoE-235B) are measured and published in [docs/BENCHMARKS.md](BENCHMARKS.md), and AVX-512 FMA and VNNI kernels are shipped in `undertow-quant`. What remains next on the systems roadmap is Intel AMX matrix extensions with OS tile permissions, the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start, peer-to-peer expert sharding across local workstation clusters, and asynchronous `io_uring` kernel submission queues on Linux.

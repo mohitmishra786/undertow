@@ -55,33 +55,45 @@ pub struct MixtralConfig {
 impl MixtralConfig {
     pub fn from_dir(dir: impl AsRef<Path>) -> Result<Self> {
         let path = dir.as_ref().join("config.json");
-        let cfg: Self = serde_json::from_slice(&std::fs::read(&path)?)
-            .map_err(|e| EngineError::InvalidConfig(format!("{}: {e}", path.display())))?;
+        let bytes = std::fs::read(&path)?;
+        Self::from_slice(&bytes)
+            .map_err(|e| EngineError::InvalidConfig(format!("{}: {e}", path.display())))
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
+        let cfg: Self =
+            serde_json::from_slice(bytes).map_err(|e| EngineError::InvalidConfig(e.to_string()))?;
         cfg.validate()?;
         Ok(cfg)
     }
 
     pub fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
+        self.hidden_size
+            .checked_div(self.num_attention_heads)
+            .unwrap_or(0)
     }
 
     fn validate(&self) -> Result<()> {
         if self.num_attention_heads == 0
+            || self.num_key_value_heads == 0
             || !self.hidden_size.is_multiple_of(self.num_attention_heads)
             || !self
                 .num_attention_heads
-                .is_multiple_of(self.num_key_value_heads.max(1))
+                .is_multiple_of(self.num_key_value_heads)
         {
             return Err(EngineError::InvalidConfig(
                 "inconsistent head geometry".into(),
             ));
         }
-        if self.num_local_experts == 0 || self.num_experts_per_tok > self.num_local_experts {
+        if self.num_local_experts == 0
+            || self.num_experts_per_tok == 0
+            || self.num_experts_per_tok > self.num_local_experts
+        {
             return Err(EngineError::InvalidConfig(
                 "inconsistent expert counts".into(),
             ));
         }
-        if !self.head_dim().is_multiple_of(2) {
+        if self.head_dim() == 0 || !self.head_dim().is_multiple_of(2) {
             return Err(EngineError::InvalidConfig(
                 "head_dim must be even for RoPE".into(),
             ));

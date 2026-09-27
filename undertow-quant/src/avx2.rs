@@ -133,7 +133,7 @@ pub fn matmul_f32(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx2_available());
+    assert!(avx2_available(), "AVX2+FMA required");
     rowwise!(
         dot_f32,
         out,
@@ -156,7 +156,7 @@ pub fn matmul_i8(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx2_available());
+    assert!(avx2_available(), "AVX2+FMA required");
     rowwise!(
         dot_i8,
         out,
@@ -179,7 +179,7 @@ pub fn matmul_i4(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx2_available());
+    assert!(avx2_available(), "AVX2+FMA required");
     let row_bytes = in_dim.div_ceil(2);
     rowwise!(
         dot_i4,

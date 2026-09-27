@@ -164,6 +164,10 @@ impl DiskExpertStore {
         }
         Ok(pinned)
     }
+
+    pub fn is_nocache(&self) -> bool {
+        self.shared.reader.is_nocache()
+    }
 }
 
 impl TieredStore for DiskExpertStore {
@@ -180,7 +184,10 @@ impl TieredStore for DiskExpertStore {
             return Ok(w);
         }
         self.shared.stats.misses.fetch_add(1, Ordering::Relaxed);
-        let w = Arc::new(self.shared.load(key)?);
+        let t0 = std::time::Instant::now();
+        let loaded = self.shared.load(key);
+        self.shared.stats.record_read(t0.elapsed());
+        let w = Arc::new(loaded?);
         self.shared.cache.insert(key, w.clone());
         Ok(w)
     }
@@ -223,7 +230,11 @@ impl TieredStore for DiskExpertStore {
     }
 
     fn stats(&self) -> StoreStatsSnapshot {
-        self.shared.stats.snapshot()
+        let mut snap = self.shared.stats.snapshot();
+        snap.bytes_used = self.shared.cache.bytes_used() as u64;
+        snap.budget_bytes = self.shared.cache.capacity_bytes().unwrap_or(0) as u64;
+        snap.evictions = self.shared.cache.evictions();
+        snap
     }
 }
 
@@ -436,5 +447,65 @@ mod tests {
         assert_eq!(s.misses, 0, "prefetched experts must not miss: {s:?}");
         assert_eq!(s.hits, 4);
         assert_eq!(s.prefetch_issued, 4);
+    }
+
+    #[test]
+    fn disk_store_tracks_read_latency_and_cache_metrics() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_model(dir.path(), 1, 2);
+        let store = open_store(dir.path(), 1024 * 1024, 0);
+
+        // Initially no reads
+        let s0 = store.stats();
+        assert_eq!(s0.read_count, 0);
+        assert_eq!(s0.bytes_used, 0);
+
+        // First fetch is a miss, triggers disk read
+        store
+            .get_expert(ExpertKey {
+                layer: 0,
+                expert: 0,
+            })
+            .unwrap();
+        let s1 = store.stats();
+        assert_eq!(s1.misses, 1);
+        assert_eq!(s1.hits, 0);
+        assert_eq!(s1.read_count, 1);
+        assert!(s1.read_duration_seconds > 0.0);
+        assert!(s1.bytes_used > 0);
+        assert_eq!(s1.budget_bytes, 1024 * 1024);
+
+        // Second fetch of same key is a cache hit
+        store
+            .get_expert(ExpertKey {
+                layer: 0,
+                expert: 0,
+            })
+            .unwrap();
+        let s2 = store.stats();
+        assert_eq!(s2.misses, 1);
+        assert_eq!(s2.hits, 1);
+        assert_eq!(s2.read_count, 1); // read count unchanged
+    }
+
+    #[test]
+    fn disk_store_reports_nocache_status() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_model(dir.path(), 1, 2);
+        let store = open_store(dir.path(), 1024 * 1024, 0);
+        assert!(!store.is_nocache());
+
+        let reader_nocache = Arc::new(ShardedModelReader::open_nocache(dir.path()).unwrap());
+        let store_nocache = DiskExpertStore::new(
+            reader_nocache,
+            Arc::new(TestNaming),
+            ExpertDims {
+                hidden: H,
+                moe_intermediate: M,
+            },
+            Arc::new(LruExpertCache::new(1024 * 1024)),
+            0,
+        );
+        assert!(store_nocache.is_nocache());
     }
 }

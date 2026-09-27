@@ -26,6 +26,47 @@ use std::path::Path;
 use undertow_core::{EngineError, QTensor, QuantFormat, Result};
 use undertow_io::{PlannedEntry, ShardWriter, ShardedModelReader};
 
+pub mod gguf;
+pub mod hf;
+pub use gguf::{convert_gguf, is_gguf_file, GgmlDtype, GgufReader};
+pub use hf::{HfClient, HfConfig, HfRemoteSource};
+
+/// Abstraction over local or remote safetensors sources.
+pub trait TensorSource {
+    fn tensor_names(&self) -> Vec<String>;
+    fn info(&self, name: &str) -> Result<undertow_io::TensorInfo>;
+    fn read_f32(&self, name: &str) -> Result<undertow_core::Tensor>;
+    fn read_f32_rows(
+        &self,
+        name: &str,
+        row_start: usize,
+        nrows: usize,
+    ) -> Result<undertow_core::Tensor>;
+}
+
+impl TensorSource for ShardedModelReader {
+    fn tensor_names(&self) -> Vec<String> {
+        self.tensor_names().map(str::to_string).collect()
+    }
+
+    fn info(&self, name: &str) -> Result<undertow_io::TensorInfo> {
+        self.info(name).cloned()
+    }
+
+    fn read_f32(&self, name: &str) -> Result<undertow_core::Tensor> {
+        self.read_f32(name)
+    }
+
+    fn read_f32_rows(
+        &self,
+        name: &str,
+        row_start: usize,
+        nrows: usize,
+    ) -> Result<undertow_core::Tensor> {
+        self.read_f32_rows(name, row_start, nrows)
+    }
+}
+
 /// Where a tensor belongs, decided by the architecture family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disposition {
@@ -90,7 +131,7 @@ struct PlannedTensor {
 }
 
 fn plan_tensor(
-    reader: &ShardedModelReader,
+    reader: &impl TensorSource,
     name: &str,
     disposition: Disposition,
     opts: &ConvertOptions,
@@ -110,7 +151,7 @@ fn plan_tensor(
     };
     Ok(PlannedTensor {
         name: name.to_string(),
-        shape: info.shape.clone(),
+        shape: info.shape,
         target,
         src_bytes: info.nbytes,
     })
@@ -151,7 +192,7 @@ fn planned_entries(t: &PlannedTensor) -> Vec<PlannedEntry> {
 
 /// Stream one tensor through quantization into the shard writer.
 fn write_tensor(
-    reader: &ShardedModelReader,
+    reader: &impl TensorSource,
     w: &mut ShardWriter,
     t: &PlannedTensor,
     row_chunk: usize,
@@ -229,21 +270,15 @@ fn shard_verifies(path: &Path, plan: &[PlannedEntry]) -> bool {
     })
 }
 
-pub fn convert(
-    src: impl AsRef<Path>,
-    dst: impl AsRef<Path>,
+fn convert_from_source(
+    reader: &impl TensorSource,
+    src_label: &str,
+    dst: &Path,
     classify: Classifier,
     opts: &ConvertOptions,
 ) -> Result<ConvertReport> {
-    let (src, dst) = (src.as_ref(), dst.as_ref());
-    if opts.row_chunk == 0 {
-        return Err(EngineError::InvalidConfig("row_chunk must be > 0".into()));
-    }
-    std::fs::create_dir_all(dst)?;
-    let reader = ShardedModelReader::open(src)?;
-
     // Group tensors into output shards, deterministically ordered.
-    let mut names: Vec<String> = reader.tensor_names().map(str::to_string).collect();
+    let mut names = reader.tensor_names();
     names.sort();
     let mut shards: BTreeMap<String, Vec<PlannedTensor>> = BTreeMap::new();
     for name in &names {
@@ -255,7 +290,7 @@ pub fn convert(
         shards
             .entry(shard)
             .or_default()
-            .push(plan_tensor(&reader, name, disposition, opts)?);
+            .push(plan_tensor(reader, name, disposition, opts)?);
     }
 
     let mut report = ConvertReport::default();
@@ -277,7 +312,7 @@ pub fn convert(
         }
         let mut w = ShardWriter::create(&out_path, &plan)?;
         for t in tensors {
-            report.bytes_out += write_tensor(&reader, &mut w, t, opts.row_chunk)?;
+            report.bytes_out += write_tensor(reader, &mut w, t, opts.row_chunk)?;
         }
         w.finish()?;
         report.shards_written += 1;
@@ -293,18 +328,11 @@ pub fn convert(
         serde_json::to_vec_pretty(&index).expect("static json"),
     )?;
 
-    for f in PASSTHROUGH_FILES {
-        let s = src.join(f);
-        if s.exists() {
-            std::fs::copy(&s, dst.join(f))?;
-        }
-    }
-
     let manifest = serde_json::json!({
         "format_version": 1,
         "expert_format": opts.expert_format.name(),
         "dense_format": opts.dense_format.name(),
-        "source": src.to_string_lossy(),
+        "source": src_label,
         "tensors": report.tensors,
         "bytes_out": report.bytes_out,
     });
@@ -314,6 +342,110 @@ pub fn convert(
     )?;
 
     Ok(report)
+}
+
+pub fn convert(
+    src: impl AsRef<Path>,
+    dst: impl AsRef<Path>,
+    classify: Classifier,
+    opts: &ConvertOptions,
+) -> Result<ConvertReport> {
+    let (src, dst) = (src.as_ref(), dst.as_ref());
+    if opts.row_chunk == 0 {
+        return Err(EngineError::InvalidConfig("row_chunk must be > 0".into()));
+    }
+    std::fs::create_dir_all(dst)?;
+    let reader = ShardedModelReader::open(src)?;
+
+    for f in PASSTHROUGH_FILES {
+        let s = src.join(f);
+        if s.exists() {
+            std::fs::copy(&s, dst.join(f))?;
+        }
+    }
+
+    convert_from_source(&reader, &src.to_string_lossy(), dst, classify, opts)
+}
+
+/// Stream directly from Hugging Face Hub, quantizing in flight and writing
+/// local undertow shards without storing uncompressed checkpoint files.
+pub fn convert_hf(
+    hf_config: HfConfig,
+    dst: impl AsRef<Path>,
+    classify: Classifier,
+    opts: &ConvertOptions,
+) -> Result<ConvertReport> {
+    let dst = dst.as_ref();
+    if opts.row_chunk == 0 {
+        return Err(EngineError::InvalidConfig("row_chunk must be > 0".into()));
+    }
+    std::fs::create_dir_all(dst)?;
+    let client = HfClient::new(hf_config.clone())?;
+
+    let config_bytes = client.fetch_file("config.json")?.ok_or_else(|| {
+        EngineError::Other(format!(
+            "{}: config.json not found on Hugging Face Hub",
+            hf_config.repo_id
+        ))
+    })?;
+    std::fs::write(dst.join("config.json"), config_bytes)?;
+
+    for f in PASSTHROUGH_FILES {
+        if *f == "config.json" {
+            continue;
+        }
+        if let Some(bytes) = client.fetch_file(f)? {
+            std::fs::write(dst.join(f), bytes)?;
+        }
+    }
+
+    let source = HfRemoteSource::with_client(client)?;
+    let src_label = format!("hf:{}", hf_config.repo_id);
+    convert_from_source(&source, &src_label, dst, classify, opts)
+}
+
+/// Stream directly from Hugging Face Hub, resolving the architecture classifier
+/// dynamically after downloading `config.json` into `dst`.
+pub fn convert_hf_with_resolver<F>(
+    hf_config: HfConfig,
+    dst: impl AsRef<Path>,
+    classify_resolver: F,
+    opts: &ConvertOptions,
+) -> Result<ConvertReport>
+where
+    F: FnOnce(&Path) -> Result<Box<dyn Fn(&str) -> Disposition + Sync>>,
+{
+    let dst = dst.as_ref();
+    if opts.row_chunk == 0 {
+        return Err(EngineError::InvalidConfig("row_chunk must be > 0".into()));
+    }
+    std::fs::create_dir_all(dst)?;
+    let client = HfClient::new(hf_config.clone())?;
+
+    // Download config.json first so the classifier resolver can inspect it.
+    let config_bytes = client.fetch_file("config.json")?.ok_or_else(|| {
+        EngineError::Other(format!(
+            "{}: config.json not found on Hugging Face Hub",
+            hf_config.repo_id
+        ))
+    })?;
+    std::fs::write(dst.join("config.json"), config_bytes)?;
+
+    // Download any available sidecar files.
+    for f in PASSTHROUGH_FILES {
+        if *f == "config.json" {
+            continue;
+        }
+        if let Some(bytes) = client.fetch_file(f)? {
+            std::fs::write(dst.join(f), bytes)?;
+        }
+    }
+
+    let classifier_box = classify_resolver(dst)?;
+    let classify: Classifier = &*classifier_box;
+    let source = HfRemoteSource::with_client(client)?;
+    let src_label = format!("hf:{}", hf_config.repo_id);
+    convert_from_source(&source, &src_label, dst, classify, opts)
 }
 
 #[cfg(test)]

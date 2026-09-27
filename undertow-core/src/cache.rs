@@ -41,6 +41,11 @@ pub trait ExpertCache: Send + Sync {
 
     /// Byte budget, if bounded.
     fn capacity_bytes(&self) -> Option<usize>;
+
+    /// Number of expert evictions performed under memory pressure.
+    fn evictions(&self) -> u64 {
+        0
+    }
 }
 
 struct LruInner {
@@ -48,6 +53,7 @@ struct LruInner {
     pinned: HashMap<ExpertKey, Arc<ExpertWeights>>,
     bytes: usize,
     budget: usize,
+    evictions: u64,
 }
 
 /// Byte-budgeted LRU with pinning.
@@ -71,6 +77,7 @@ impl LruExpertCache {
                 pinned: HashMap::new(),
                 bytes: 0,
                 budget,
+                evictions: 0,
             }),
         }
     }
@@ -103,7 +110,10 @@ impl ExpertCache for LruExpertCache {
         g.bytes += size;
         while g.bytes > g.budget {
             match g.lru.pop_lru() {
-                Some((_, evicted)) => g.bytes -= evicted.nbytes(),
+                Some((_, evicted)) => {
+                    g.bytes -= evicted.nbytes();
+                    g.evictions += 1;
+                }
                 None => break,
             }
         }
@@ -123,7 +133,10 @@ impl ExpertCache for LruExpertCache {
         // unpinned tail to compensate as far as possible.
         while g.bytes > g.budget {
             match g.lru.pop_lru() {
-                Some((_, evicted)) => g.bytes -= evicted.nbytes(),
+                Some((_, evicted)) => {
+                    g.bytes -= evicted.nbytes();
+                    g.evictions += 1;
+                }
                 None => break,
             }
         }
@@ -139,6 +152,10 @@ impl ExpertCache for LruExpertCache {
 
     fn capacity_bytes(&self) -> Option<usize> {
         Some(self.lock().budget)
+    }
+
+    fn evictions(&self) -> u64 {
+        self.lock().evictions
     }
 }
 
@@ -168,6 +185,7 @@ struct WeightedInner {
     bytes: usize,
     budget: usize,
     tick: u64,
+    evictions: u64,
 }
 
 /// Importance-weighted eviction (MoE-Infinity style): each entry carries
@@ -198,6 +216,7 @@ impl WeightedExpertCache {
                 bytes: 0,
                 budget,
                 tick: 0,
+                evictions: 0,
             }),
             half_life: half_life.max(1.0),
         }
@@ -231,6 +250,7 @@ impl WeightedExpertCache {
                 .expect("map not empty");
             if let Some(e) = g.map.remove(&coldest) {
                 g.bytes -= e.weights.nbytes();
+                g.evictions += 1;
             }
         }
     }
@@ -312,6 +332,10 @@ impl ExpertCache for WeightedExpertCache {
 
     fn capacity_bytes(&self) -> Option<usize> {
         Some(self.lock().budget)
+    }
+
+    fn evictions(&self) -> u64 {
+        self.lock().evictions
     }
 }
 
@@ -452,5 +476,33 @@ mod tests {
         }
         assert!(cache.get(key(9, 9)).is_some());
         assert!(cache.bytes_used() <= one * 2);
+    }
+
+    #[test]
+    fn lru_evictions_counter() {
+        let e = expert(1.0);
+        let one = e.nbytes();
+        let cache = LruExpertCache::new(one * 2);
+        assert_eq!(cache.evictions(), 0);
+        cache.insert(key(0, 0), e.clone());
+        cache.insert(key(0, 1), e.clone());
+        assert_eq!(cache.evictions(), 0);
+        cache.insert(key(0, 2), e.clone());
+        assert_eq!(cache.evictions(), 1);
+        cache.insert(key(0, 3), e.clone());
+        assert_eq!(cache.evictions(), 2);
+    }
+
+    #[test]
+    fn weighted_evictions_counter() {
+        let e = expert(1.0);
+        let one = e.nbytes();
+        let cache = WeightedExpertCache::new(one * 2);
+        assert_eq!(cache.evictions(), 0);
+        cache.insert(key(0, 0), e.clone());
+        cache.insert(key(0, 1), e.clone());
+        assert_eq!(cache.evictions(), 0);
+        cache.insert(key(0, 2), e.clone());
+        assert_eq!(cache.evictions(), 1);
     }
 }

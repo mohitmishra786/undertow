@@ -374,6 +374,53 @@ impl QTensor {
         }
         #[cfg(all(target_arch = "x86_64", not(miri)))]
         {
+            if crate::avx512::avx512_available() {
+                match self {
+                    Self::F32 { data, .. } => crate::avx512::matmul_f32(
+                        out,
+                        x,
+                        &data[row_start * id..(row_start + nrows) * id],
+                        1,
+                        id,
+                        nrows,
+                    ),
+                    Self::Int8 { q, scales, .. }
+                        if crate::fast_int8_enabled() && crate::avx512::avx512vnni_available() =>
+                    {
+                        crate::avx512::matmul_i8_vnni(
+                            out,
+                            x,
+                            &q[row_start * id..(row_start + nrows) * id],
+                            &scales[row_start..row_start + nrows],
+                            1,
+                            id,
+                            nrows,
+                        )
+                    }
+                    Self::Int8 { q, scales, .. } => crate::avx512::matmul_i8(
+                        out,
+                        x,
+                        &q[row_start * id..(row_start + nrows) * id],
+                        &scales[row_start..row_start + nrows],
+                        1,
+                        id,
+                        nrows,
+                    ),
+                    Self::Int4 { packed, scales, .. } => {
+                        let rb = id.div_ceil(2);
+                        crate::avx512::matmul_i4(
+                            out,
+                            x,
+                            &packed[row_start * rb..(row_start + nrows) * rb],
+                            &scales[row_start..row_start + nrows],
+                            1,
+                            id,
+                            nrows,
+                        )
+                    }
+                }
+                return;
+            }
             if crate::avx2::avx2_available() {
                 match self {
                     Self::F32 { data, .. } => crate::avx2::matmul_f32(

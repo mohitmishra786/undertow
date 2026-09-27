@@ -26,7 +26,7 @@ pub enum RopeKind {
 }
 
 /// Attention family. Dimensions here are per-head unless noted.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AttentionKind {
     /// Multi-head Latent Attention (DeepSeek-V3/V4, GLM-5.2, Kimi K2).
     /// KV is compressed to a `kv_lora_rank` latent per token; k/v per head
@@ -42,12 +42,25 @@ pub enum AttentionKind {
         v_head_dim: usize,
         rope: RopeKind,
     },
-    /// Grouped-query attention (future families).
+    /// Grouped-query attention (Mixtral, Qwen-MoE).
     Gqa {
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
         rope: RopeKind,
+    },
+    /// Gated DeltaNet / KDA linear recurrent attention (Qwen3.5/3.8, Kimi K3, GLM-5.3).
+    GatedDeltaNet {
+        num_heads: usize,
+        key_dim: usize,
+        value_dim: usize,
+    },
+    /// Hybrid layer architecture alternating between full attention and linear recurrent attention.
+    Hybrid {
+        full_attn: Box<AttentionKind>,
+        linear_attn: Box<AttentionKind>,
+        /// Layers using full attention (all other layers use linear attention).
+        full_attn_layers: Vec<usize>,
     },
 }
 

@@ -67,6 +67,7 @@ pub struct SafetensorsReader {
     file: File,
     path: PathBuf,
     tensors: HashMap<String, TensorInfo>,
+    nocache: bool,
 }
 
 /// Parse and validate a safetensors header against the actual file size.
@@ -143,11 +144,23 @@ pub fn parse_header(
 
 impl SafetensorsReader {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_nocache(path, false)
+    }
+
+    pub fn open_nocache(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_nocache(path, true)
+    }
+
+    pub fn open_with_nocache(path: impl AsRef<Path>, nocache: bool) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
 
+        if nocache {
+            let _ = set_file_nocache(&file, true);
+        }
+
         let mut len_buf = [0u8; 8];
-        read_exact_at(&file, &mut len_buf, 0)?;
+        read_exact_at(&file, &mut len_buf, 0, nocache)?;
         let header_len = u64::from_le_bytes(len_buf);
         if header_len > MAX_HEADER_LEN {
             return Err(EngineError::Other(format!(
@@ -157,7 +170,7 @@ impl SafetensorsReader {
         }
 
         let mut header = vec![0u8; header_len as usize];
-        read_exact_at(&file, &mut header, 8)?;
+        read_exact_at(&file, &mut header, 8, nocache)?;
         let data_start = 8 + header_len;
         let file_len = file.metadata()?.len();
         let tensors = parse_header(&header, data_start, file_len, &path.display().to_string())?;
@@ -166,7 +179,18 @@ impl SafetensorsReader {
             file,
             path,
             tensors,
+            nocache,
         })
+    }
+
+    pub fn is_nocache(&self) -> bool {
+        self.nocache
+    }
+
+    pub fn set_nocache(&mut self, enable: bool) -> io::Result<()> {
+        set_file_nocache(&self.file, enable)?;
+        self.nocache = enable;
+        Ok(())
     }
 
     pub fn tensor_names(&self) -> impl Iterator<Item = &str> {
@@ -187,7 +211,7 @@ impl SafetensorsReader {
     pub fn read_raw(&self, name: &str) -> Result<Vec<u8>> {
         let info = self.info(name)?;
         let mut buf = vec![0u8; info.nbytes as usize];
-        read_exact_at(&self.file, &mut buf, info.offset)?;
+        read_exact_at(&self.file, &mut buf, info.offset, self.nocache)?;
         Ok(buf)
     }
 
@@ -213,8 +237,9 @@ impl SafetensorsReader {
         let elem = info.dtype.byte_size();
         let offset = info.offset + (row_start * in_dim * elem) as u64;
         let mut raw = vec![0u8; nrows * in_dim * elem];
-        read_exact_at(&self.file, &mut raw, offset)?;
-        let data = decode_f32(&raw, info.dtype, name, &self.path)?;
+        read_exact_at(&self.file, &mut raw, offset, self.nocache)?;
+        let path_str = self.path.display().to_string();
+        let data = decode_f32(&raw, info.dtype, name, &path_str)?;
         Ok(Tensor::new(vec![nrows, in_dim], data))
     }
 
@@ -222,12 +247,13 @@ impl SafetensorsReader {
     pub fn read_f32(&self, name: &str) -> Result<Tensor> {
         let info = self.info(name)?.clone();
         let raw = self.read_raw(name)?;
-        let data = decode_f32(&raw, info.dtype, name, &self.path)?;
+        let path_str = self.path.display().to_string();
+        let data = decode_f32(&raw, info.dtype, name, &path_str)?;
         Ok(Tensor::new(info.shape, data))
     }
 }
 
-fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, path: &Path) -> Result<Vec<f32>> {
+pub fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, ctx: &str) -> Result<Vec<f32>> {
     Ok(match dtype {
         Dtype::F32 => {
             let (words, _) = raw.as_chunks::<4>();
@@ -249,8 +275,7 @@ fn decode_f32(raw: &[u8], dtype: Dtype, name: &str, path: &Path) -> Result<Vec<f
         }
         other => {
             return Err(EngineError::Other(format!(
-                "{}: cannot convert {other:?} tensor {name} to f32",
-                path.display()
+                "{ctx}: cannot convert {other:?} tensor {name} to f32"
             )))
         }
     })
@@ -267,6 +292,14 @@ pub struct ShardedModelReader {
 
 impl ShardedModelReader {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_nocache(dir, false)
+    }
+
+    pub fn open_nocache(dir: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_nocache(dir, true)
+    }
+
+    pub fn open_with_nocache(dir: impl AsRef<Path>, nocache: bool) -> Result<Self> {
         let dir = dir.as_ref();
         let index_path = dir.join("model.safetensors.index.json");
         if index_path.exists() {
@@ -291,7 +324,10 @@ impl ShardedModelReader {
                     Some(&id) => id,
                     None => {
                         let id = shards.len();
-                        shards.push(SafetensorsReader::open(dir.join(file))?);
+                        shards.push(SafetensorsReader::open_with_nocache(
+                            dir.join(file),
+                            nocache,
+                        )?);
                         shard_ids.insert(file.to_string(), id);
                         id
                     }
@@ -300,7 +336,8 @@ impl ShardedModelReader {
             }
             Ok(Self { shards, index })
         } else {
-            let single = SafetensorsReader::open(dir.join("model.safetensors"))?;
+            let single =
+                SafetensorsReader::open_with_nocache(dir.join("model.safetensors"), nocache)?;
             let index = single
                 .tensor_names()
                 .map(|n| (n.to_string(), 0usize))
@@ -310,6 +347,17 @@ impl ShardedModelReader {
                 index,
             })
         }
+    }
+
+    pub fn is_nocache(&self) -> bool {
+        self.shards.iter().all(|s| s.is_nocache())
+    }
+
+    pub fn set_nocache(&mut self, enable: bool) -> io::Result<()> {
+        for s in &mut self.shards {
+            s.set_nocache(enable)?;
+        }
+        Ok(())
     }
 
     fn shard_for(&self, name: &str) -> Result<&SafetensorsReader> {
@@ -395,14 +443,94 @@ pub fn read_qtensor(
     }
 }
 
-#[cfg(unix)]
-fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+#[cfg(target_os = "macos")]
+pub fn set_file_nocache(file: &File, enable: bool) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    extern "C" {
+        fn fcntl(fd: std::os::raw::c_int, cmd: std::os::raw::c_int, ...) -> std::os::raw::c_int;
+    }
+    const F_NOCACHE: std::os::raw::c_int = 48;
+    let fd = file.as_raw_fd();
+    let val: std::os::raw::c_int = if enable { 1 } else { 0 };
+    let ret = unsafe { fcntl(fd, F_NOCACHE, val) };
+    if ret == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_file_nocache(file: &File, enable: bool) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    extern "C" {
+        fn posix_fadvise(
+            fd: std::os::raw::c_int,
+            offset: i64,
+            len: i64,
+            advise: std::os::raw::c_int,
+        ) -> std::os::raw::c_int;
+    }
+    const POSIX_FADV_NORMAL: std::os::raw::c_int = 0;
+    const POSIX_FADV_RANDOM: std::os::raw::c_int = 1;
+    const POSIX_FADV_DONTNEED: std::os::raw::c_int = 4;
+    let fd = file.as_raw_fd();
+    let advise = if enable {
+        POSIX_FADV_RANDOM
+    } else {
+        POSIX_FADV_NORMAL
+    };
+    let ret = unsafe { posix_fadvise(fd, 0, 0, advise) };
+    if ret != 0 {
+        Err(io::Error::from_raw_os_error(ret))
+    } else {
+        if enable {
+            unsafe {
+                let _ = posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn set_file_nocache(_file: &File, _enable: bool) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64, nocache: bool) -> io::Result<()> {
+    file.read_exact_at(buf, offset)?;
+    if nocache && !buf.is_empty() {
+        use std::os::unix::io::AsRawFd;
+        extern "C" {
+            fn posix_fadvise(
+                fd: std::os::raw::c_int,
+                offset: i64,
+                len: i64,
+                advise: std::os::raw::c_int,
+            ) -> std::os::raw::c_int;
+        }
+        const POSIX_FADV_DONTNEED: std::os::raw::c_int = 4;
+        unsafe {
+            let _ = posix_fadvise(
+                file.as_raw_fd(),
+                offset as i64,
+                buf.len() as i64,
+                POSIX_FADV_DONTNEED,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64, _nocache: bool) -> io::Result<()> {
     file.read_exact_at(buf, offset)
 }
 
 #[cfg(not(unix))]
-fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
-    // Windows fallback: seek_read equivalent via FileExt.
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64, _nocache: bool) -> io::Result<()> {
     use std::os::windows::fs::FileExt as WinFileExt;
     let mut done = 0;
     while done < buf.len() {
@@ -416,4 +544,44 @@ fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
         done += n;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nocache_toggle_and_bit_identical_reads() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../undertow-bench/fixtures/oracle-tiny");
+        let model_file = fixture.join("model.safetensors");
+        if !model_file.exists() {
+            return;
+        }
+
+        // 1. Open with nocache = false (default)
+        let r1 = SafetensorsReader::open(&model_file).unwrap();
+        assert!(!r1.is_nocache());
+
+        // 2. Open with nocache = true
+        let r2 = SafetensorsReader::open_nocache(&model_file).unwrap();
+        assert!(r2.is_nocache());
+
+        // 3. Read same tensor with both and verify bit-identity
+        for name in r1.tensor_names() {
+            let b1 = r1.read_raw(name).unwrap();
+            let b2 = r2.read_raw(name).unwrap();
+            assert_eq!(
+                b1, b2,
+                "tensor {name} mismatch between nocache and cached read"
+            );
+        }
+
+        // 4. ShardedModelReader respects nocache
+        let smr = ShardedModelReader::open(&fixture).unwrap();
+        assert!(!smr.is_nocache());
+
+        let smr_nocache = ShardedModelReader::open_nocache(&fixture).unwrap();
+        assert!(smr_nocache.is_nocache());
+    }
 }

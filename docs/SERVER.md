@@ -15,14 +15,16 @@ undertow serve --model /models/some-moe-int4 --port 8080 \
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | Liveness; never requires auth. |
-| GET | `/metrics` | Prometheus text: requests, tokens, cancellations, timeouts, queue rejections, expert-store hits/misses/bytes, prefetch counters. |
+| GET | `/metrics` | Prometheus text: requests, tokens, cancellations, timeouts, queue rejections, expert-store hits/misses/bytes, prefetch counters, cache hit ratio, memory gauges, evictions, disk read latency histogram, and decode rate. |
 | GET | `/v1/models` | The loaded model. |
 | POST | `/v1/completions` | Raw text completion. |
-| POST | `/v1/chat/completions` | Chat; `"stream": true` for SSE. |
+| POST | `/v1/chat/completions` | Chat; `"stream": true` for SSE; supports `tools` and `tool_choice`. |
+| GET | `/api/tags` | Ollama model tags list shim. |
+| POST | `/api/chat` | Ollama chat completion shim (NDJSON stream or unary JSON). |
 
 Supported request fields: `messages` or `prompt`, `max_tokens` (alias
 `max_completion_tokens`), `temperature`, `top_p`, `seed`, `stop` (string
-or array), `stream`. Prompts longer than the context window are clamped
+or array), `stream`, `tools`, `tool_choice`. Prompts longer than the context window are clamped
 to their tail, OpenAI-style.
 
 ```sh
@@ -40,6 +42,21 @@ Streaming responses are `chat.completion.chunk` SSE events ending with
 never emitted) or cannot complete anymore (flushed), so clients never see
 a partial stop marker.
 
+### Tool & Function Calling
+
+Undertow supports structured tool / function calling via OpenAI `/v1/chat/completions` and Ollama `/api/chat`.
+Tool schemas provided in the `tools` array are passed to the chat template or injected into the prompt context.
+Tool calls produced by the model (formatted as `<tool_call>...</tool_call>`, ````tool_call...```` markdown blocks, or raw JSON objects) are automatically extracted:
+- In OpenAI chat responses, `finish_reason` is set to `"tool_calls"`, and the extracted calls are populated in `message.tool_calls` with generated `call_...` IDs.
+- In Ollama chat responses, `done_reason` is set to `"tool_calls"`, and the calls are populated in `message.tool_calls`.
+- Setting `"tool_choice": "none"` suppresses tool execution instructions.
+
+### Ollama Compatibility Shim
+
+Undertow provides first-class support for tooling and frontends built for Ollama (e.g. Continue, Open WebUI):
+- `GET /api/tags` returns the loaded model as both `<model>` and `<model>:latest`.
+- `POST /api/chat` accepts Ollama-format payloads (`model`, `messages`, `stream`, `options: {num_predict, temperature, top_p, seed, stop}`, `tools`) and streams line-delimited NDJSON responses (`application/x-ndjson`).
+
 ## Operational behavior
 
 - One generation runs at a time; up to `--max-queue` requests wait, and
@@ -53,3 +70,24 @@ a partial stop marker.
   `/health` requires `Authorization: Bearer <key>`.
 - Ctrl-c stops accepting connections and lets in-flight requests finish
   inside their deadline.
+
+## Prometheus Metrics
+
+The `/metrics` endpoint exposes runtime telemetry in Prometheus text exposition format:
+
+- **Gauges**:
+  - `undertow_inflight`: Active generations currently executing.
+  - `undertow_queued`: Pending requests waiting for generation slot.
+  - `undertow_tokens_per_second`: Instantaneous token generation rate from the last completed decode.
+  - `undertow_expert_cache_hit_ratio`: Ratio of expert cache hits to total lookups (`hits / (hits + misses)`).
+  - `undertow_expert_cache_bytes_used`: Total bytes currently held in the expert cache.
+  - `undertow_expert_cache_budget_bytes`: Configured byte budget for the expert cache.
+- **Counters**:
+  - `undertow_requests_total`, `undertow_responses_4xx_total`, `undertow_responses_5xx_total`
+  - `undertow_tokens_generated_total`, `undertow_generations_cancelled_total`, `undertow_generations_timed_out_total`, `undertow_queue_rejections_total`
+  - `undertow_expert_store_hits_total`, `undertow_expert_store_misses_total`, `undertow_expert_store_bytes_read_total`
+  - `undertow_prefetch_issued_total`, `undertow_prefetch_dropped_total`
+  - `undertow_expert_evictions_total`: Expert weights evicted under memory pressure.
+- **Histogram**:
+  - `undertow_disk_read_duration_seconds`: Latency of synchronous `pread` expert fetch calls (`_bucket`, `_sum`, `_count`).
+

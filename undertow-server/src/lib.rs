@@ -128,6 +128,8 @@ pub fn router(state: Arc<ServerState>) -> axum::Router {
             "/v1/chat/completions",
             post(api::chat_completions).options(preflight),
         )
+        .route("/api/tags", get(api::ollama_tags))
+        .route("/api/chat", post(api::ollama_chat).options(preflight))
         .layer(axum::middleware::from_fn_with_state(state.clone(), observe))
         .with_state(state)
 }

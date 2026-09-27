@@ -13,6 +13,9 @@ publish.workspace = true
 undertow-core.workspace = true
 undertow-io.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
+half.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+undertow-deepseek-moe.workspace = true

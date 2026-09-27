@@ -36,9 +36,10 @@ pub use cache::{ExpertCache, LruExpertCache, WeightedExpertCache};
 pub use error::{EngineError, Result};
 pub use model::{generate, greedy_decode, Model, Session};
 pub use profile::ExpertProfile;
-pub use router::SoftmaxTopKRouter;
+pub use router::{topk_indices, SoftmaxTopKRouter};
 pub use store::{
     ExpertKey, ExpertWeights, ResidentStore, StoreStats, StoreStatsSnapshot, TieredStore,
+    DISK_READ_LATENCY_BUCKETS, NUM_READ_LATENCY_BUCKETS,
 };
 pub use tensor::Tensor;
 

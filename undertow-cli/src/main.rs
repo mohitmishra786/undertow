@@ -62,18 +62,36 @@ impl SamplingArgs {
         })
         .map_err(|e| anyhow::anyhow!(e))
     }
+
+    fn config(&self) -> SamplerConfig {
+        SamplerConfig {
+            temperature: self.temperature.max(0.0),
+            top_p: self.top_p,
+            top_k: self.top_k,
+            seed: self.seed,
+        }
+    }
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Quantize an HF checkpoint into a streaming undertow checkpoint.
     Convert {
-        /// Source model directory (config.json + safetensors).
+        /// Source model directory (config.json + safetensors) or Hugging Face repo (e.g. hf:deepseek-ai/DeepSeek-V3).
         #[arg(long)]
-        src: PathBuf,
+        src: String,
         /// Output directory.
         #[arg(long)]
         out: PathBuf,
+        /// Hugging Face API token (env: HF_TOKEN).
+        #[arg(long, env = "HF_TOKEN")]
+        hf_token: Option<String>,
+        /// Hugging Face revision / branch / commit.
+        #[arg(long, default_value = "main")]
+        hf_revision: String,
+        /// Hugging Face endpoint / base URL (env: HF_ENDPOINT).
+        #[arg(long, env = "HF_ENDPOINT")]
+        hf_endpoint: Option<String>,
         /// Routed-expert format: int4, int8 or f32.
         #[arg(long, default_value = "int4")]
         experts: String,
@@ -160,6 +178,24 @@ enum Command {
         #[command(subcommand)]
         command: BenchCommand,
     },
+    /// Manage expert usage profiles.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// Merge multiple expert usage profiles into a single profile.
+    Merge {
+        /// Input profile JSON files to merge.
+        #[arg(long = "inputs", required = true, num_args = 1..)]
+        inputs: Vec<PathBuf>,
+        /// Destination path for the merged profile JSON.
+        #[arg(long = "out")]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -221,6 +257,9 @@ fn main() -> Result<()> {
         Command::Convert {
             src,
             out,
+            hf_token,
+            hf_revision,
+            hf_endpoint,
             experts,
             dense,
             row_chunk,
@@ -233,9 +272,52 @@ fn main() -> Result<()> {
                 force,
             };
             let t0 = Instant::now();
-            let classify = registry::classifier_for(&src)?;
-            let report = undertow_convert::convert(&src, &out, &classify, &opts)
-                .with_context(|| format!("converting {}", src.display()))?;
+            let report = if let Some(repo_id) = src
+                .strip_prefix("hf://")
+                .or_else(|| src.strip_prefix("hf:"))
+            {
+                let mut hf_config = undertow_convert::HfConfig::new(repo_id)
+                    .with_token(hf_token)
+                    .with_revision(hf_revision);
+                if let Some(ep) = hf_endpoint {
+                    hf_config = hf_config.with_endpoint(ep);
+                }
+                undertow_convert::convert_hf_with_resolver(
+                    hf_config,
+                    &out,
+                    |dst| {
+                        let c = registry::classifier_for(dst)
+                            .map_err(|e| undertow_core::EngineError::Other(e.to_string()))?;
+                        Ok(Box::new(c)
+                            as Box<
+                                dyn Fn(&str) -> undertow_convert::Disposition + Sync,
+                            >)
+                    },
+                    &opts,
+                )
+                .with_context(|| format!("converting remote repo {src}"))?
+            } else if src.ends_with(".gguf") || undertow_convert::is_gguf_file(&src) {
+                let src_path = PathBuf::from(&src);
+                undertow_convert::convert_gguf(
+                    &src_path,
+                    &out,
+                    |dst| {
+                        let c = registry::classifier_for(dst)
+                            .map_err(|e| undertow_core::EngineError::Other(e.to_string()))?;
+                        Ok(Box::new(c)
+                            as Box<
+                                dyn Fn(&str) -> undertow_convert::Disposition + Sync,
+                            >)
+                    },
+                    &opts,
+                )
+                .with_context(|| format!("converting GGUF file {src}"))?
+            } else {
+                let src_path = PathBuf::from(&src);
+                let classify = registry::classifier_for(&src_path)?;
+                undertow_convert::convert(&src_path, &out, &classify, &opts)
+                    .with_context(|| format!("converting {}", src_path.display()))?
+            };
             println!(
                 "converted {} tensors into {} shards ({} skipped as already complete)",
                 report.tensors, report.shards_written, report.shards_skipped
@@ -256,9 +338,6 @@ fn main() -> Result<()> {
             stats,
             mtp,
         } => {
-            if mtp && sampling.temperature != 0.0 {
-                bail!("--mtp requires greedy decoding (temperature 0)");
-            }
             let model = load_model(&margs)?;
             let (ids, tokenizer) = match (&prompt, &prompt_ids) {
                 (Some(text), None) => {
@@ -275,11 +354,17 @@ fn main() -> Result<()> {
             let mut session = model.new_session();
             let n = if mtp {
                 let ds = registry::as_deepseek(&margs.model, &margs.load_options()?)?;
-                let (n, mtp_stats) =
-                    undertow_deepseek_moe::generate_greedy_mtp(&ds, &ids, max_new, &[], |id| {
+                let (n, mtp_stats) = undertow_deepseek_moe::generate_mtp(
+                    &ds,
+                    &ids,
+                    max_new,
+                    sampling.config(),
+                    &[],
+                    |id| {
                         generated.push(id);
                         true
-                    })?;
+                    },
+                )?;
                 eprintln!(
                     "mtp: {}/{} drafts accepted ({:.0}%)",
                     mtp_stats.accepted,
@@ -430,6 +515,63 @@ fn main() -> Result<()> {
                 margs.export_profile(&*model)?;
             }
         },
+        Command::Profile { command } => match command {
+            ProfileCommand::Merge { inputs, out } => {
+                if inputs.is_empty() {
+                    bail!("at least one input profile is required");
+                }
+                let mut profiles = Vec::with_capacity(inputs.len());
+                for path in &inputs {
+                    let p = undertow_core::ExpertProfile::load(path)
+                        .with_context(|| format!("loading profile from {}", path.display()))?;
+                    profiles.push(p);
+                }
+                let merged = undertow_core::ExpertProfile::merge_all(&profiles)?;
+                merged
+                    .save(&out)
+                    .with_context(|| format!("saving merged profile to {}", out.display()))?;
+                println!(
+                    "Merged {} profiles (arch: {}) -> {} ({} active experts)",
+                    inputs.len(),
+                    merged.architecture,
+                    out.display(),
+                    merged.counts.len()
+                );
+            }
+        },
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_profile_merge_cli() {
+        let cli = Cli::try_parse_from([
+            "undertow",
+            "profile",
+            "merge",
+            "--inputs",
+            "p1.json",
+            "p2.json",
+            "--out",
+            "merged.json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Merge { inputs, out },
+            } => {
+                assert_eq!(
+                    inputs,
+                    vec![PathBuf::from("p1.json"), PathBuf::from("p2.json")]
+                );
+                assert_eq!(out, PathBuf::from("merged.json"));
+            }
+            _ => panic!("expected Profile::Merge command"),
+        }
+    }
 }
