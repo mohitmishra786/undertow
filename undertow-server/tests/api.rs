@@ -422,3 +422,107 @@ async fn request_timeout_returns_partial_with_length() {
     let n = v["usage"]["completion_tokens"].as_u64().unwrap();
     assert!(n < 100, "timeout did not stop generation early: {n}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn model_validation_match_and_mismatch() {
+    let base = spawn_server().await;
+    let client = reqwest::Client::new();
+
+    // 1. Chat completion with matching model succeeds
+    let res = client
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "oracle-tiny",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    // 2. Chat completion with mismatched model fails with 400
+    let res = client
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "nonexistent-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match loaded model"),
+        "error message should describe model mismatch: {body}"
+    );
+
+    // 3. Chat completion without model field succeeds (optional field)
+    let res = client
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    // 4. Text completion with matching model succeeds
+    let res = client
+        .post(format!("{base}/v1/completions"))
+        .json(&serde_json::json!({
+            "model": "oracle-tiny",
+            "prompt": "hi",
+            "max_tokens": 4,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    // 5. Text completion with mismatched model fails with 400
+    let res = client
+        .post(format!("{base}/v1/completions"))
+        .json(&serde_json::json!({
+            "model": "nonexistent-model",
+            "prompt": "hi",
+            "max_tokens": 4,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match loaded model"),
+        "error message should describe model mismatch: {body}"
+    );
+
+    // 6. Text completion without model field succeeds
+    let res = client
+        .post(format!("{base}/v1/completions"))
+        .json(&serde_json::json!({
+            "prompt": "hi",
+            "max_tokens": 4,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+}

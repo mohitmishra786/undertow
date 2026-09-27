@@ -102,7 +102,6 @@ impl SamplingFields {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatRequest {
-    #[allow(dead_code)]
     #[serde(default)]
     model: Option<String>,
     messages: Vec<ChatMessageIn>,
@@ -124,7 +123,6 @@ pub(crate) struct ChatMessageIn {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompletionRequest {
-    #[allow(dead_code)]
     #[serde(default)]
     model: Option<String>,
     prompt: String,
@@ -177,6 +175,22 @@ pub async fn completions(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<CompletionRequest>,
 ) -> Response {
+    if let Some(ref req_model) = req.model {
+        if req_model != &state.model_name {
+            tracing::warn!(
+                requested = %req_model,
+                loaded = %state.model_name,
+                "model mismatch in completion request"
+            );
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "model '{req_model}' does not match loaded model '{}'",
+                    state.model_name
+                ),
+            );
+        }
+    }
     let prompt_ids = match state.tokenizer.encode(&req.prompt, true) {
         Ok(ids) if !ids.is_empty() => fit_prompt(&state, ids, req.max_tokens),
         Ok(_) => return error_response(StatusCode::BAD_REQUEST, "empty prompt"),
@@ -199,6 +213,22 @@ pub async fn chat_completions(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<ChatRequest>,
 ) -> Response {
+    if let Some(ref req_model) = req.model {
+        if req_model != &state.model_name {
+            tracing::warn!(
+                requested = %req_model,
+                loaded = %state.model_name,
+                "model mismatch in chat completion request"
+            );
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "model '{req_model}' does not match loaded model '{}'",
+                    state.model_name
+                ),
+            );
+        }
+    }
     if req.messages.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "messages must not be empty");
     }

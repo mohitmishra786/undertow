@@ -38,6 +38,9 @@ Format follows keepachangelog.com; versions follow semver once published.
   RUSTSEC-2026-0285, keeping `cargo audit` and `cargo deny` clean.
 - Architecture documentation (`docs/ARCHITECTURE.md`) reconciled with
   the shipped AVX2 kernel implementation and future AVX-512/AMX roadmap.
+- Model name validation in `undertow-server` validates incoming `ChatRequest`
+  and `CompletionRequest` `model` parameter against the loaded model name,
+  eliminating `#[allow(dead_code)]` annotations and rejecting mismatches.
 
 ## 0.1.0 (2026-07-12)
 
