@@ -13,7 +13,7 @@ Format follows keepachangelog.com; versions follow semver once published.
   integer accumulation on NEON.
 - AVX2 kernels for x86_64 with runtime detection, parity-tested against
   the scalar reference.
-- AVX-512 FMA, VNNI (`VPDPBUSD`), and Intel AMX matrix kernels in `undertow-quant`
+- AVX-512 FMA and VNNI (`VPDPBUSD`) vector kernels in `undertow-quant`
   with runtime CPUID detection, accelerating 512-bit vector matmuls and INT8 matrix
   multiplications on modern x86_64 architectures (Zen 4/5, Sapphire/Emerald/Granite Rapids).
 - Criterion micro-benchmarks and a scheduled benchmark workflow.
@@ -86,6 +86,17 @@ Format follows keepachangelog.com; versions follow semver once published.
   RUSTSEC-2026-0285, keeping `cargo audit` and `cargo deny` clean.
 - Architecture documentation (`docs/ARCHITECTURE.md`) reconciled with
   the shipped AVX2 kernel implementation and future AVX-512/AMX roadmap.
+- Cross-platform CI compatibility across Linux (x64/arm64), macOS, and Windows runners,
+  including Windows non-unix file seeking and typos check rules.
+- Gated AVX-512 target features behind Rust 1.89+ version detection via build script,
+  preserving MSRV 1.88 compilation integrity while building AVX-512 kernels on modern rustc.
+- GGUF header parser hardened against unbounded allocations on untrusted files; mapped
+  DeepSeek MLA projections and QK normalization sub-tensors.
+- Defaulted safetensors and sharded readers to cached I/O, preserving explicit `open_nocache`
+  for streaming disk cache loops.
+- Ollama endpoint compatibility hardened for streaming chunk error payloads and structured
+  JSON object tool call responses.
+- Excluded prompt prefill duration from decode generation rate calculations in `undertow-server`.
 - Model name validation in `undertow-server` validates incoming `ChatRequest`
   and `CompletionRequest` `model` parameter against the loaded model name,
   eliminating `#[allow(dead_code)]` annotations and rejecting mismatches.

@@ -493,6 +493,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_test_model(dir.path(), 1, 2);
         let store = open_store(dir.path(), 1024 * 1024, 0);
-        assert!(store.is_nocache());
+        assert!(!store.is_nocache());
+
+        let reader_nocache = Arc::new(ShardedModelReader::open_nocache(dir.path()).unwrap());
+        let store_nocache = DiskExpertStore::new(
+            reader_nocache,
+            Arc::new(TestNaming),
+            ExpertDims {
+                hidden: H,
+                moe_intermediate: M,
+            },
+            Arc::new(LruExpertCache::new(1024 * 1024)),
+            0,
+        );
+        assert!(store_nocache.is_nocache());
     }
 }

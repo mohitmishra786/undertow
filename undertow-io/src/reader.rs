@@ -144,6 +144,10 @@ pub fn parse_header(
 
 impl SafetensorsReader {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_nocache(path, false)
+    }
+
+    pub fn open_nocache(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_nocache(path, true)
     }
 
@@ -288,6 +292,10 @@ pub struct ShardedModelReader {
 
 impl ShardedModelReader {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_nocache(dir, false)
+    }
+
+    pub fn open_nocache(dir: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_nocache(dir, true)
     }
 
@@ -551,13 +559,13 @@ mod tests {
             return;
         }
 
-        // 1. Open with nocache = true (default)
+        // 1. Open with nocache = false (default)
         let r1 = SafetensorsReader::open(&model_file).unwrap();
-        assert!(r1.is_nocache());
+        assert!(!r1.is_nocache());
 
-        // 2. Open with nocache = false
-        let r2 = SafetensorsReader::open_with_nocache(&model_file, false).unwrap();
-        assert!(!r2.is_nocache());
+        // 2. Open with nocache = true
+        let r2 = SafetensorsReader::open_nocache(&model_file).unwrap();
+        assert!(r2.is_nocache());
 
         // 3. Read same tensor with both and verify bit-identity
         for name in r1.tensor_names() {
@@ -571,9 +579,9 @@ mod tests {
 
         // 4. ShardedModelReader respects nocache
         let smr = ShardedModelReader::open(&fixture).unwrap();
-        assert!(smr.is_nocache());
+        assert!(!smr.is_nocache());
 
-        let smr_cached = ShardedModelReader::open_with_nocache(&fixture, false).unwrap();
-        assert!(!smr_cached.is_nocache());
+        let smr_nocache = ShardedModelReader::open_nocache(&fixture).unwrap();
+        assert!(smr_nocache.is_nocache());
     }
 }

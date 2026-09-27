@@ -21,8 +21,18 @@ mod neon;
 #[cfg(all(target_arch = "x86_64", not(miri)))]
 pub mod avx2;
 
-#[cfg(all(target_arch = "x86_64", not(miri)))]
+#[cfg(all(target_arch = "x86_64", has_avx512, not(miri)))]
 pub mod avx512;
+
+#[cfg(all(target_arch = "x86_64", not(has_avx512), not(miri)))]
+pub mod avx512 {
+    pub fn avx512_available() -> bool {
+        false
+    }
+    pub fn avx512vnni_available() -> bool {
+        false
+    }
+}
 
 mod qtensor;
 

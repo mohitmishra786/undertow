@@ -180,8 +180,8 @@ pub fn deltanet_forward_seq(
 
     for t in 0..seq {
         let xt = &x[t * d.hidden..(t + 1) * d.hidden];
-        let ot = &mut out[t * d.hidden..(t + 1) * d.hidden];
-        deltanet_step(xt, state, w, d, ot);
+        let out_t = &mut out[t * d.hidden..(t + 1) * d.hidden];
+        deltanet_step(xt, state, w, d, out_t);
     }
 }
 
@@ -271,8 +271,8 @@ mod tests {
         let mut out_step = vec![0.0f32; seq * dims.hidden];
         for t in 0..seq {
             let xt = &x[t * dims.hidden..(t + 1) * dims.hidden];
-            let ot = &mut out_step[t * dims.hidden..(t + 1) * dims.hidden];
-            deltanet_step(xt, &mut state_step, &weights, &dims, ot);
+            let out_t = &mut out_step[t * dims.hidden..(t + 1) * dims.hidden];
+            deltanet_step(xt, &mut state_step, &weights, &dims, out_t);
         }
 
         // Outputs must match to floating-point precision

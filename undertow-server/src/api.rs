@@ -109,8 +109,25 @@ fn value_to_tool_call(v: &serde_json::Value, counter: &mut usize) -> Option<Tool
         .to_string();
     let arguments = if let Some(args) = v.get("arguments").or_else(|| v.get("parameters")) {
         match args {
-            serde_json::Value::String(s) => s.clone(),
-            other => serde_json::to_string(other).unwrap_or_default(),
+            serde_json::Value::Null => "{}".to_string(),
+            serde_json::Value::String(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    "{}".to_string()
+                } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if parsed.is_object() {
+                        trimmed.to_string()
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+            serde_json::Value::Object(_) => {
+                serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string())
+            }
+            _ => return None,
         }
     } else {
         "{}".to_string()
@@ -327,7 +344,7 @@ pub(crate) struct OllamaOptions {
     #[serde(default)]
     seed: Option<u64>,
     #[serde(default)]
-    num_predict: Option<usize>,
+    num_predict: Option<i64>,
     #[serde(default)]
     stop: Option<Vec<String>>,
 }
@@ -414,9 +431,9 @@ pub async fn completions(
         stop_strings: req.stop.map(StopField::into_vec).unwrap_or_default(),
     };
     if req.stream {
-        stream_response(state, gen, "text_completion", request_id("cmpl")).await
+        stream_response(state, gen, "text_completion", request_id("cmpl"), false).await
     } else {
-        unary_response(state, gen, false, request_id("cmpl")).await
+        unary_response(state, gen, false, request_id("cmpl"), false).await
     }
 }
 
@@ -454,9 +471,14 @@ pub async fn chat_completions(
             tool_calls: m.tool_calls,
         })
         .collect();
-    let tools = match &req.tool_choice {
-        Some(serde_json::Value::String(s)) if s == "none" => None,
-        _ => req.tools.as_deref(),
+    let tools_enabled = match &req.tool_choice {
+        Some(serde_json::Value::String(s)) if s == "none" => false,
+        _ => req.tools.as_ref().is_some_and(|t| !t.is_empty()),
+    };
+    let tools = if tools_enabled {
+        req.tools.as_deref()
+    } else {
+        None
     };
     let prompt_ids = match match tools {
         Some(t) => chat_prompt_ids_with_tools(&state, &messages, Some(t)),
@@ -473,9 +495,16 @@ pub async fn chat_completions(
         stop_strings: req.stop.map(StopField::into_vec).unwrap_or_default(),
     };
     if req.stream {
-        stream_response(state, gen, "chat.completion.chunk", request_id("chatcmpl")).await
+        stream_response(
+            state,
+            gen,
+            "chat.completion.chunk",
+            request_id("chatcmpl"),
+            tools_enabled,
+        )
+        .await
     } else {
-        unary_response(state, gen, true, request_id("chatcmpl")).await
+        unary_response(state, gen, true, request_id("chatcmpl"), tools_enabled).await
     }
 }
 
@@ -484,6 +513,7 @@ async fn unary_response(
     gen: GenerationRequest,
     chat: bool,
     id: String,
+    tools_enabled: bool,
 ) -> Response {
     let Some(permit) = acquire_slot(&state).await else {
         return busy_response();
@@ -516,7 +546,11 @@ async fn unary_response(
         "total_tokens": prompt_tokens + completion_tokens,
     });
     let body = if chat {
-        let (content, tool_calls) = extract_tool_calls(&text);
+        let (content, tool_calls) = if tools_enabled {
+            extract_tool_calls(&text)
+        } else {
+            (Some(text), None)
+        };
         let finish_reason = if tool_calls.is_some() {
             "tool_calls"
         } else {
@@ -559,6 +593,7 @@ async fn stream_response(
     gen: GenerationRequest,
     object: &'static str,
     id: String,
+    tools_enabled: bool,
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let model_name = state.model_name.clone();
@@ -607,25 +642,93 @@ async fn stream_response(
         };
         let chunk2 = chunk.clone();
         let result = tokio::task::spawn_blocking(move || {
-            // A failed send means the client hung up: stop generating.
-            generate_blocking(&state3, &gen, deadline, |t| {
-                tx2.send(chunk2(t, None)).is_ok()
-            })
+            let mut full_text = String::new();
+            let res = generate_blocking(&state3, &gen, deadline, |t| {
+                if tools_enabled {
+                    full_text.push_str(t);
+                    true
+                } else {
+                    tx2.send(chunk2(t, None)).is_ok()
+                }
+            });
+            res.map(|(n, finish)| (full_text, n, finish))
         })
         .await;
         release_slot(&state2);
         drop(permit);
-        let finish = match result {
-            Ok(Ok((_, finish))) => finish,
-            _ => Finish::Stop,
+        let (full_text, finish) = match result {
+            Ok(Ok((txt, _, finish))) => (txt, finish),
+            _ => (String::new(), Finish::Stop),
         };
-        let _ = tx.send(chunk("", Some(finish.as_openai())));
+        if tools_enabled {
+            let (content, tool_calls) = extract_tool_calls(&full_text);
+            if let Some(calls) = tool_calls {
+                let mut delta = serde_json::json!({ "role": "assistant" });
+                if let Some(c) = content {
+                    delta["content"] = serde_json::json!(c);
+                }
+                delta["tool_calls"] = serde_json::json!(calls);
+                let choice = serde_json::json!({
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "tool_calls",
+                });
+                let _ = tx.send(
+                    Event::default().data(
+                        serde_json::json!({
+                            "id": id,
+                            "object": object,
+                            "created": now_unix(),
+                            "model": state.model_name,
+                            "choices": [choice],
+                        })
+                        .to_string(),
+                    ),
+                );
+            } else {
+                let choice = serde_json::json!({
+                    "index": 0,
+                    "delta": { "role": "assistant", "content": full_text },
+                    "finish_reason": finish.as_openai(),
+                });
+                let _ = tx.send(
+                    Event::default().data(
+                        serde_json::json!({
+                            "id": id,
+                            "object": object,
+                            "created": now_unix(),
+                            "model": state.model_name,
+                            "choices": [choice],
+                        })
+                        .to_string(),
+                    ),
+                );
+            }
+        } else {
+            let _ = tx.send(chunk("", Some(finish.as_openai())));
+        }
         let _ = tx.send(Event::default().data("[DONE]"));
     });
 
     let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
         .map(Ok::<_, std::convert::Infallible>);
     Sse::new(stream).into_response()
+}
+
+fn to_ollama_tool_calls(calls: &[ToolCall]) -> Vec<serde_json::Value> {
+    calls
+        .iter()
+        .map(|c| {
+            let args_val: serde_json::Value =
+                serde_json::from_str(&c.function.arguments).unwrap_or(serde_json::json!({}));
+            serde_json::json!({
+                "function": {
+                    "name": c.function.name,
+                    "arguments": args_val,
+                }
+            })
+        })
+        .collect()
 }
 
 pub async fn ollama_tags(State(state): State<Arc<ServerState>>) -> Json<serde_json::Value> {
@@ -694,11 +797,11 @@ pub async fn ollama_chat(
             tool_calls: m.tool_calls,
         })
         .collect();
-    let max_tokens = req
-        .options
-        .as_ref()
-        .and_then(|o| o.num_predict)
-        .unwrap_or_else(default_max_tokens);
+    let tools_enabled = req.tools.as_ref().is_some_and(|t| !t.is_empty());
+    let max_tokens = match req.options.as_ref().and_then(|o| o.num_predict) {
+        Some(n) if n > 0 => n as usize,
+        _ => default_max_tokens(),
+    };
     let sampling = SamplerConfig {
         temperature: req
             .options
@@ -726,13 +829,17 @@ pub async fn ollama_chat(
         stop_strings,
     };
     if req.stream.unwrap_or(true) {
-        ollama_stream_response(state, gen).await
+        ollama_stream_response(state, gen, tools_enabled).await
     } else {
-        ollama_unary_response(state, gen).await
+        ollama_unary_response(state, gen, tools_enabled).await
     }
 }
 
-async fn ollama_unary_response(state: Arc<ServerState>, gen: GenerationRequest) -> Response {
+async fn ollama_unary_response(
+    state: Arc<ServerState>,
+    gen: GenerationRequest,
+    tools_enabled: bool,
+) -> Response {
     let Some(permit) = acquire_slot(&state).await else {
         return busy_response();
     };
@@ -757,7 +864,11 @@ async fn ollama_unary_response(state: Arc<ServerState>, gen: GenerationRequest) 
         Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     let duration_ns = start.elapsed().as_nanos() as u64;
-    let (content, tool_calls) = extract_tool_calls(&text);
+    let (content, tool_calls) = if tools_enabled {
+        extract_tool_calls(&text)
+    } else {
+        (Some(text), None)
+    };
     let done_reason = if tool_calls.is_some() {
         "tool_calls"
     } else {
@@ -768,7 +879,7 @@ async fn ollama_unary_response(state: Arc<ServerState>, gen: GenerationRequest) 
         "content": content.unwrap_or_default(),
     });
     if let Some(calls) = tool_calls {
-        message["tool_calls"] = serde_json::json!(calls);
+        message["tool_calls"] = serde_json::json!(to_ollama_tool_calls(&calls));
     }
     let body = serde_json::json!({
         "model": state.model_name,
@@ -786,7 +897,11 @@ async fn ollama_unary_response(state: Arc<ServerState>, gen: GenerationRequest) 
     Json(body).into_response()
 }
 
-async fn ollama_stream_response(state: Arc<ServerState>, gen: GenerationRequest) -> Response {
+async fn ollama_stream_response(
+    state: Arc<ServerState>,
+    gen: GenerationRequest,
+    tools_enabled: bool,
+) -> Response {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let model_name = state.model_name.clone();
     let state2 = state.clone();
@@ -826,9 +941,28 @@ async fn ollama_stream_response(state: Arc<ServerState>, gen: GenerationRequest)
         let duration_ns = start.elapsed().as_nanos() as u64;
         let (full_text, completion_tokens, finish) = match result {
             Ok(Ok(v)) => v,
-            _ => (String::new(), 0, Finish::Stop),
+            Ok(Err(e)) => {
+                let err = serde_json::json!({
+                    "error": format!("{e}"),
+                    "done": true,
+                });
+                let _ = tx.send(format!("{}\n", err));
+                return;
+            }
+            Err(join_err) => {
+                let err = serde_json::json!({
+                    "error": format!("task panicked or was canceled: {join_err}"),
+                    "done": true,
+                });
+                let _ = tx.send(format!("{}\n", err));
+                return;
+            }
         };
-        let (_, tool_calls) = extract_tool_calls(&full_text);
+        let (content, tool_calls) = if tools_enabled {
+            extract_tool_calls(&full_text)
+        } else {
+            (Some(full_text), None)
+        };
         let done_reason = if tool_calls.is_some() {
             "tool_calls"
         } else {
@@ -836,10 +970,10 @@ async fn ollama_stream_response(state: Arc<ServerState>, gen: GenerationRequest)
         };
         let mut final_msg = serde_json::json!({
             "role": "assistant",
-            "content": "",
+            "content": content.unwrap_or_default(),
         });
         if let Some(calls) = tool_calls {
-            final_msg["tool_calls"] = serde_json::json!(calls);
+            final_msg["tool_calls"] = serde_json::json!(to_ollama_tool_calls(&calls));
         }
         let final_chunk = serde_json::json!({
             "model": model_name,

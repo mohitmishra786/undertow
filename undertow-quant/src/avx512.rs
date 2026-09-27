@@ -28,17 +28,6 @@ pub fn avx512vnni_available() -> bool {
     *AVAILABLE.get_or_init(|| avx512_available() && is_x86_feature_detected!("avx512vnni"))
 }
 
-/// Check if Intel Advanced Matrix Extensions (AMX-TILE and AMX-INT8) are available.
-pub fn amx_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let res = __cpuid_count(7, 0);
-        let tile = (res.edx & (1 << 24)) != 0;
-        let int8 = (res.edx & (1 << 25)) != 0;
-        tile && int8
-    })
-}
-
 #[target_feature(enable = "avx512f,avx512bw,avx512dq,avx512vl")]
 unsafe fn dot_f32(x: &[f32], w: &[f32], n: usize) -> f32 {
     let mut acc0 = _mm512_setzero_ps();
@@ -181,7 +170,7 @@ pub fn matmul_f32(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx512_available());
+    assert!(avx512_available(), "AVX-512 required");
     rowwise!(
         dot_f32,
         out,
@@ -204,7 +193,7 @@ pub fn matmul_i8(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx512_available());
+    assert!(avx512_available(), "AVX-512 required");
     rowwise!(
         dot_i8,
         out,
@@ -227,7 +216,7 @@ pub fn matmul_i8_vnni(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx512vnni_available());
+    assert!(avx512vnni_available(), "AVX-512 VNNI required");
     let mut qa = vec![0i8; in_dim];
     for s in 0..seq {
         let xs = &x[s * in_dim..(s + 1) * in_dim];
@@ -250,7 +239,7 @@ pub fn matmul_i4(
     in_dim: usize,
     out_dim: usize,
 ) {
-    debug_assert!(avx512_available());
+    assert!(avx512_available(), "AVX-512 required");
     let row_bytes = in_dim.div_ceil(2);
     rowwise!(
         dot_i4,
@@ -263,84 +252,6 @@ pub fn matmul_i4(
         out_dim,
         row_bytes
     );
-}
-
-/// AMX 64-byte palette configuration.
-#[repr(C, align(64))]
-pub struct AmxTileConfig {
-    pub palette_id: u8,
-    pub start_row: u8,
-    pub reserved: [u8; 14],
-    pub colsb: [u16; 16],
-    pub rows: [u8; 16],
-}
-
-impl Default for AmxTileConfig {
-    fn default() -> Self {
-        Self {
-            palette_id: 1,
-            start_row: 0,
-            reserved: [0; 14],
-            colsb: [0; 16],
-            rows: [0; 16],
-        }
-    }
-}
-
-/// Execute INT8 matrix multiplication on Intel AMX matrix tiles.
-///
-/// Tiles:
-/// - TMM0: Accumulator tile (rows M x cols N in 32-bit integers)
-/// - TMM1: Activation tile (rows M x cols K in unsigned 8-bit integers)
-/// - TMM2: Weight tile (rows K/4 x cols N*4 in signed 8-bit integers)
-///
-/// # Safety
-/// Caller must ensure `amx_available()` is true and the CPU has enabled AMX execution state.
-pub unsafe fn amx_matmul_i8(
-    out: &mut [f32],
-    x: &[f32],
-    q: &[i8],
-    scales: &[f32],
-    seq: usize,
-    in_dim: usize,
-    out_dim: usize,
-) {
-    let mut qa = vec![0i8; in_dim];
-    let mut rows = [0u8; 16];
-    rows[0] = 16;
-    rows[1] = 16;
-    rows[2] = 16;
-    let mut colsb = [0u16; 16];
-    colsb[0] = 64;
-    colsb[1] = 64;
-    colsb[2] = 64;
-    let cfg = AmxTileConfig {
-        palette_id: 1,
-        start_row: 0,
-        reserved: [0; 14],
-        colsb,
-        rows,
-    };
-
-    core::arch::asm!(
-        "ldtilecfg [{}]",
-        in(reg) &cfg as *const _,
-        options(nostack)
-    );
-
-    // Fall back to VNNI / row loop for remaining non-tile borders
-    for s in 0..seq {
-        let xs = &x[s * in_dim..(s + 1) * in_dim];
-        let a_scale = crate::quantize_activations(xs, &mut qa);
-        let os = &mut out[s * out_dim..(s + 1) * out_dim];
-        for (o, oo) in os.iter_mut().enumerate() {
-            let row = &q[o * in_dim..(o + 1) * in_dim];
-            let acc = dot_i8_vnni(&qa, row, in_dim);
-            *oo = (acc as f32) * a_scale * scales[o];
-        }
-    }
-
-    core::arch::asm!("tilerelease", options(nostack));
 }
 
 #[cfg(test)]

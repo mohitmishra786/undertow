@@ -273,8 +273,8 @@ fn main() -> Result<()> {
             };
             let t0 = Instant::now();
             let report = if let Some(repo_id) = src
-                .strip_prefix("hf:")
-                .or_else(|| src.strip_prefix("hf://"))
+                .strip_prefix("hf://")
+                .or_else(|| src.strip_prefix("hf:"))
             {
                 let mut hf_config = undertow_convert::HfConfig::new(repo_id)
                     .with_token(hf_token)

@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 use undertow_core::sample::{Sampler, SamplerConfig};
@@ -197,6 +197,7 @@ pub fn generate_blocking(
     let mut session = state.model.new_session();
     let mut hit_stop_token = false;
     let mut cancelled = false;
+    let mut first_token_time: Option<Instant> = None;
     let mut timed_out = false;
     let produced = undertow_core::generate(
         &mut *session,
@@ -205,6 +206,9 @@ pub fn generate_blocking(
         &mut sampler,
         &stop_ids,
         |id| {
+            if first_token_time.is_none() {
+                first_token_time = Some(Instant::now());
+            }
             if std::time::Instant::now() >= deadline {
                 timed_out = true;
                 return false;
@@ -225,13 +229,26 @@ pub fn generate_blocking(
             }
         },
     )?;
-    let elapsed = t0.elapsed().as_secs_f64();
-    if elapsed > 0.0 && produced > 0 {
-        let tps = produced as f64 / elapsed;
-        state
-            .metrics
-            .tokens_per_second_bits
-            .store(tps.to_bits(), Ordering::Relaxed);
+    if produced > 1 {
+        if let Some(t_first) = first_token_time {
+            let decode_elapsed = t_first.elapsed().as_secs_f64();
+            if decode_elapsed > 0.0 {
+                let tps = (produced - 1) as f64 / decode_elapsed;
+                state
+                    .metrics
+                    .tokens_per_second_bits
+                    .store(tps.to_bits(), Ordering::Relaxed);
+            }
+        }
+    } else if produced == 1 {
+        let elapsed = t0.elapsed().as_secs_f64();
+        if elapsed > 0.0 {
+            let tps = 1.0 / elapsed;
+            state
+                .metrics
+                .tokens_per_second_bits
+                .store(tps.to_bits(), Ordering::Relaxed);
+        }
     }
     state
         .metrics

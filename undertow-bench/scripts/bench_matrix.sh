@@ -36,16 +36,32 @@ echo "======================================================================"
 drop_caches() {
     echo "Flushing OS filesystem caches..."
     if [[ "$(uname)" == "Darwin" ]]; then
-        sudo purge 2>/dev/null || true
+        if ! sudo purge; then
+            echo "Warning: sudo purge failed or was not authorized; cold start may retain file caches" >&2
+        fi
     elif [[ -f /proc/sys/vm/drop_caches ]]; then
         sync
-        echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
+        if ! echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null; then
+            echo "Warning: flushing drop_caches failed; cold start may retain file caches" >&2
+        fi
+    else
+        echo "Warning: no supported cache drop command found for $(uname)" >&2
     fi
 }
 
+TIME_CMD=()
+if [[ -x /usr/bin/time ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+        TIME_CMD=(/usr/bin/time -l)
+    else
+        TIME_CMD=(/usr/bin/time -v)
+    fi
+fi
+
 run_phase() {
     local phase_name="$1"
-    local extra_args="$2"
+    shift
+    local phase_args=("$@")
     local log_file="$OUTPUT_DIR/${phase_name}.log"
 
     echo ""
@@ -53,29 +69,29 @@ run_phase() {
     echo ">>> Running Phase: $phase_name"
     echo "----------------------------------------------------------------------"
 
-    # Run undertow with time measurement
-    /usr/bin/time -l cargo run --release -p undertow-cli -- run \
+    # Run undertow with platform time measurement and quoted arguments
+    "${TIME_CMD[@]}" cargo run --release -p undertow-cli -- run \
         --model "$MODEL_PATH" \
         --prompt "$PROMPT" \
         --max-new "$MAX_NEW" \
         --cache-budget-mb "$BUDGET_MB" \
         --stats \
-        $extra_args 2>&1 | tee "$log_file"
+        "${phase_args[@]}" 2>&1 | tee "$log_file"
 }
 
 # 1. Cold Start
 drop_caches
-run_phase "01_cold_start" "--profile-out $PROFILE_PATH"
+run_phase "01_cold_start" --profile-out "$PROFILE_PATH"
 
-# 2. Warm Unpinned
-run_phase "02_warm_unpinned" ""
+# 2. Warm Run (OS Page-Cache Warm)
+run_phase "02_warm_cache"
 
-# 3. Pinned Working Set (Top 25% hot experts pinned into memory)
-run_phase "03_pinned_working_set" "--profile $PROFILE_PATH --cache-policy weighted"
+# 3. Pinned Working Set (Hottest experts pinned up to 25% cache budget)
+run_phase "03_pinned_working_set" --profile "$PROFILE_PATH" --cache-policy weighted
 
 # 4. MTP Speculative Decoding
-if cargo run --release -p undertow-cli -- run --model "$MODEL_PATH" --help | grep -q "\-\-mtp"; then
-    run_phase "04_mtp_speculative" "--profile $PROFILE_PATH --cache-policy weighted --mtp"
+if cargo run --release -p undertow-cli -- run --model "$MODEL_PATH" --help 2>&1 | grep -q "\-\-mtp"; then
+    run_phase "04_mtp_speculative" --profile "$PROFILE_PATH" --cache-policy weighted --mtp
 fi
 
 echo ""

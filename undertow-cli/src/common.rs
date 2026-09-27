@@ -86,9 +86,7 @@ impl ModelArgs {
         let mut profile = ExpertProfile::new(model.architecture(), counts);
         if path.exists() {
             let existing = ExpertProfile::load(path)?;
-            if existing.architecture == profile.architecture {
-                profile.merge(&existing)?;
-            }
+            profile.merge(&existing)?;
         }
         profile.save(path)?;
         tracing::info!("wrote expert profile to {}", path.display());

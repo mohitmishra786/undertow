@@ -111,45 +111,65 @@ impl HfClient {
     pub fn fetch_range(&self, filename: &str, start: u64, end: u64) -> Result<Vec<u8>> {
         let url = self.file_url(filename);
         let range_val = format!("bytes={start}-{end}");
-        let mut headers = self.headers();
-        headers.insert(RANGE, HeaderValue::from_str(&range_val).unwrap());
+        let headers = self.headers();
 
-        let resp = self.client.get(&url).headers(headers).send().map_err(|e| {
-            EngineError::Other(format!(
-                "HTTP error fetching range {range_val} from {url}: {e}"
-            ))
-        })?;
+        let max_retries = 3;
+        let mut last_err = String::new();
 
-        let status = resp.status();
-        if status != reqwest::StatusCode::PARTIAL_CONTENT && status != reqwest::StatusCode::OK {
-            return Err(EngineError::Other(format!(
-                "HTTP {status} fetching byte range {range_val} from {url}"
-            )));
-        }
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100 * (1 << (attempt - 1))));
+            }
+            let mut req_headers = headers.clone();
+            req_headers.insert(RANGE, HeaderValue::from_str(&range_val).unwrap());
 
-        let bytes = resp
-            .bytes()
-            .map_err(|e| EngineError::Other(format!("error reading body from {url}: {e}")))?;
+            let resp = match self.client.get(&url).headers(req_headers).send() {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = format!("HTTP error fetching range {range_val} from {url}: {e}");
+                    continue;
+                }
+            };
 
-        let expected_len = (end - start + 1) as usize;
-        if status == reqwest::StatusCode::PARTIAL_CONTENT {
-            if bytes.len() != expected_len {
+            let status = resp.status();
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                last_err = format!("HTTP {status} fetching byte range {range_val} from {url}");
+                continue;
+            }
+            if status != reqwest::StatusCode::PARTIAL_CONTENT && status != reqwest::StatusCode::OK {
                 return Err(EngineError::Other(format!(
-                    "{url}: short range read: expected {expected_len} bytes, got {}",
-                    bytes.len()
+                    "HTTP {status} fetching byte range {range_val} from {url}"
                 )));
             }
-            Ok(bytes.to_vec())
-        } else {
-            // Server ignored Range header and sent full body
-            if bytes.len() < (end + 1) as usize {
-                return Err(EngineError::Other(format!(
-                    "{url}: response too short for range {start}-{end}: len {}",
-                    bytes.len()
-                )));
+
+            let bytes = resp
+                .bytes()
+                .map_err(|e| EngineError::Other(format!("error reading body from {url}: {e}")))?;
+
+            let expected_len = (end - start + 1) as usize;
+            if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                if bytes.len() != expected_len {
+                    return Err(EngineError::Other(format!(
+                        "{url}: short range read: expected {expected_len} bytes, got {}",
+                        bytes.len()
+                    )));
+                }
+                return Ok(bytes.to_vec());
+            } else {
+                // Server ignored Range header and sent full body
+                if bytes.len() < (end + 1) as usize {
+                    return Err(EngineError::Other(format!(
+                        "{url}: response too short for range {start}-{end}: len {}",
+                        bytes.len()
+                    )));
+                }
+                return Ok(bytes[start as usize..=end as usize].to_vec());
             }
-            Ok(bytes[start as usize..=end as usize].to_vec())
         }
+
+        Err(EngineError::Other(format!(
+            "exhausted retries fetching {range_val} from {url}: {last_err}"
+        )))
     }
 
     /// Fetch file size via HEAD or range probe.

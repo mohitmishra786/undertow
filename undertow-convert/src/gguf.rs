@@ -1,3 +1,6 @@
+#![allow(unknown_lints)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -5,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
+
+#[cfg(not(unix))]
+use std::io::SeekFrom;
 
 use undertow_core::{EngineError, Result, Tensor};
 use undertow_io::{Dtype, TensorInfo};
@@ -548,6 +554,11 @@ fn read_string<R: Read>(r: &mut R) -> Result<String> {
     let mut buf8 = [0u8; 8];
     r.read_exact(&mut buf8)?;
     let len = u64::from_le_bytes(buf8) as usize;
+    if len > 10 * 1024 * 1024 {
+        return Err(EngineError::Other(format!(
+            "GGUF string length {len} exceeds safety limit"
+        )));
+    }
     let mut str_bytes = vec![0u8; len];
     r.read_exact(&mut str_bytes)?;
     String::from_utf8(str_bytes).map_err(|e| EngineError::Other(format!("bad utf-8 string: {e}")))
@@ -608,7 +619,12 @@ fn read_metadata_value_of_type<R: Read>(r: &mut R, type_id: u32) -> Result<GgufM
             let elem_type = u32::from_le_bytes(buf4);
             r.read_exact(&mut buf8)?;
             let count = u64::from_le_bytes(buf8) as usize;
-            let mut list = Vec::with_capacity(count);
+            if count > 10_000_000 {
+                return Err(EngineError::Other(format!(
+                    "GGUF array count {count} exceeds safety limit"
+                )));
+            }
+            let mut list = Vec::with_capacity(count.min(100_000));
             for _ in 0..count {
                 list.push(read_metadata_value_of_type(r, elem_type)?);
             }
@@ -689,6 +705,12 @@ fn map_standard_tensor_name(raw: &str, arch: &str) -> String {
         let sub = parts[2];
         match sub {
             "attn_q" => format!("model.layers.{layer}.self_attn.q_proj.weight"),
+            "attn_q_a" => format!("model.layers.{layer}.self_attn.q_a_proj.weight"),
+            "attn_q_b" => format!("model.layers.{layer}.self_attn.q_b_proj.weight"),
+            "attn_kv_a" => format!("model.layers.{layer}.self_attn.kv_a_proj_with_mqa.weight"),
+            "attn_kv_b" => format!("model.layers.{layer}.self_attn.kv_b_proj.weight"),
+            "attn_q_norm" => format!("model.layers.{layer}.self_attn.q_norm.weight"),
+            "attn_k_norm" => format!("model.layers.{layer}.self_attn.k_norm.weight"),
             "attn_k" => format!("model.layers.{layer}.self_attn.k_proj.weight"),
             "attn_v" => format!("model.layers.{layer}.self_attn.v_proj.weight"),
             "attn_output" => format!("model.layers.{layer}.self_attn.o_proj.weight"),

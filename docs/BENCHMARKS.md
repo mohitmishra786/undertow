@@ -44,11 +44,11 @@ For this thesis to hold in practice, the inference engine must demonstrate:
 
 ## Measurement Protocol: Four Operating Conditions
 
-For each model, benchmarks are executed over a 512-token prompt with 256 generated tokens under four sequential conditions:
+For each model, benchmarks are executed over a fixed 512-token evaluation prompt (standardized across tokenizers to exactly 512 input tokens) with 256 generated tokens under four sequential conditions:
 
-1. **Cold Start:** Operating system filesystem caches are purged (`purge` / `drop_caches`). Expert cache starts completely empty. Every unique expert activation requires a direct NVMe read.
-2. **Warm Unpinned:** Run immediately following generation. Expert cache retains the 512-token LRU working set.
-3. **Pinned Working Set:** The top 25% most frequently activated experts (identified by an `ExpertProfile` trace from a pre-flight calibration set) are permanently pinned in the resident budget. The remaining cache budget operates under weighted exponential-decay eviction.
+1. **Cold Start:** Operating system filesystem caches are purged (`sudo purge` on Darwin / `echo 3 > /proc/sys/vm/drop_caches` on Linux). Expert cache starts completely empty. Every unique expert activation requires a direct NVMe read.
+2. **Warm Unpinned:** Run immediately following the initial decode without dropping OS page cache.
+3. **Pinned Working Set:** The most frequently activated experts (identified by an `ExpertProfile` trace from a pre-flight calibration set) are permanently pinned in the resident budget up to 25% of the total cache budget in bytes (the default `--pin-budget-bytes` allocation). The remaining cache budget operates under weighted exponential-decay eviction.
 4. **MTP Speculative Decoding (DeepSeek-V3):** Native Multi-Token Prediction enabled, drafting 1 speculative token per forward pass and verifying via 2-token verification prefill.
 
 ---
