@@ -36,6 +36,8 @@ Format follows keepachangelog.com; versions follow semver once published.
   API, so the workspace builds against the bumped dependency.
 - Transitive `h2` and `rustls` updated past RUSTSEC-2026-0258 and
   RUSTSEC-2026-0285, keeping `cargo audit` and `cargo deny` clean.
+- Architecture documentation (`docs/ARCHITECTURE.md`) reconciled with
+  the shipped AVX2 kernel implementation and future AVX-512/AMX roadmap.
 
 ## 0.1.0 (2026-07-12)
 
