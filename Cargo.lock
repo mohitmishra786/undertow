@@ -2394,6 +2394,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "undertow-core",
+ "undertow-deepseek-moe",
  "undertow-io",
 ]
 

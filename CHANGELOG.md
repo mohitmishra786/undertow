@@ -24,6 +24,8 @@ Format follows keepachangelog.com; versions follow semver once published.
   binaries, checksums, an SBOM and build provenance.
 - Declared MSRV 1.88, checked in CI, and inherited by every workspace
   member so the floor is enforced by cargo rather than by convention.
+- Integration test in `undertow-convert` asserting bit-identical output
+  shards across varying row chunk sizes (1, 13, and 1024).
 
 ### Fixed
 - safetensors headers with malformed `data_offsets` arrays or overflowing
