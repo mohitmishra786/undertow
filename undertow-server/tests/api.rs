@@ -354,6 +354,71 @@ async fn metrics_expose_counters() {
     assert!(text.contains("undertow_requests_total"), "{text}");
     assert!(text.contains("undertow_tokens_generated_total 5"), "{text}");
     assert!(text.contains("undertow_expert_store_hits_total"), "{text}");
+    assert!(
+        text.contains("# HELP undertow_expert_cache_hit_ratio"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# TYPE undertow_expert_cache_hit_ratio gauge"),
+        "{text}"
+    );
+    assert!(text.contains("undertow_expert_cache_hit_ratio"), "{text}");
+    assert!(
+        text.contains("# HELP undertow_expert_cache_bytes_used"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# TYPE undertow_expert_cache_bytes_used gauge"),
+        "{text}"
+    );
+    assert!(text.contains("undertow_expert_cache_bytes_used"), "{text}");
+    assert!(
+        text.contains("# HELP undertow_expert_cache_budget_bytes"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# TYPE undertow_expert_cache_budget_bytes gauge"),
+        "{text}"
+    );
+    assert!(
+        text.contains("undertow_expert_cache_budget_bytes"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# HELP undertow_expert_evictions_total"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# TYPE undertow_expert_evictions_total counter"),
+        "{text}"
+    );
+    assert!(text.contains("undertow_expert_evictions_total"), "{text}");
+    assert!(text.contains("# HELP undertow_tokens_per_second"), "{text}");
+    assert!(
+        text.contains("# TYPE undertow_tokens_per_second gauge"),
+        "{text}"
+    );
+    assert!(text.contains("undertow_tokens_per_second"), "{text}");
+    assert!(
+        text.contains("# HELP undertow_disk_read_duration_seconds"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# TYPE undertow_disk_read_duration_seconds histogram"),
+        "{text}"
+    );
+    assert!(
+        text.contains("undertow_disk_read_duration_seconds_bucket"),
+        "{text}"
+    );
+    assert!(
+        text.contains("undertow_disk_read_duration_seconds_sum"),
+        "{text}"
+    );
+    assert!(
+        text.contains("undertow_disk_read_duration_seconds_count"),
+        "{text}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

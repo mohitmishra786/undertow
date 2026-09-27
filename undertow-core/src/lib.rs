@@ -39,6 +39,7 @@ pub use profile::ExpertProfile;
 pub use router::SoftmaxTopKRouter;
 pub use store::{
     ExpertKey, ExpertWeights, ResidentStore, StoreStats, StoreStatsSnapshot, TieredStore,
+    DISK_READ_LATENCY_BUCKETS, NUM_READ_LATENCY_BUCKETS,
 };
 pub use tensor::Tensor;
 

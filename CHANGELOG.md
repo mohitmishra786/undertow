@@ -28,6 +28,9 @@ Format follows keepachangelog.com; versions follow semver once published.
   shards across varying row chunk sizes (1, 13, and 1024).
 - CLI utility `undertow profile merge` to combine and rank multiple
   expert usage profiles into a unified hot-expert profile.
+- Extended Prometheus `/metrics` telemetry with cache hit ratio, RAM bytes used,
+  cache budget, expert evictions total, synchronous pread latency histogram,
+  and instantaneous decode generation rate.
 
 ### Fixed
 - Fuzz target `model_config` expanded to cover `MixtralConfig` and `QwenConfig`

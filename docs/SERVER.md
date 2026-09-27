@@ -15,7 +15,7 @@ undertow serve --model /models/some-moe-int4 --port 8080 \
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | Liveness; never requires auth. |
-| GET | `/metrics` | Prometheus text: requests, tokens, cancellations, timeouts, queue rejections, expert-store hits/misses/bytes, prefetch counters. |
+| GET | `/metrics` | Prometheus text: requests, tokens, cancellations, timeouts, queue rejections, expert-store hits/misses/bytes, prefetch counters, cache hit ratio, memory gauges, evictions, disk read latency histogram, and decode rate. |
 | GET | `/v1/models` | The loaded model. |
 | POST | `/v1/completions` | Raw text completion. |
 | POST | `/v1/chat/completions` | Chat; `"stream": true` for SSE. |
@@ -53,3 +53,24 @@ a partial stop marker.
   `/health` requires `Authorization: Bearer <key>`.
 - Ctrl-c stops accepting connections and lets in-flight requests finish
   inside their deadline.
+
+## Prometheus Metrics
+
+The `/metrics` endpoint exposes runtime telemetry in Prometheus text exposition format:
+
+- **Gauges**:
+  - `undertow_inflight`: Active generations currently executing.
+  - `undertow_queued`: Pending requests waiting for generation slot.
+  - `undertow_tokens_per_second`: Instantaneous token generation rate from the last completed decode.
+  - `undertow_expert_cache_hit_ratio`: Ratio of expert cache hits to total lookups (`hits / (hits + misses)`).
+  - `undertow_expert_cache_bytes_used`: Total bytes currently held in the expert cache.
+  - `undertow_expert_cache_budget_bytes`: Configured byte budget for the expert cache.
+- **Counters**:
+  - `undertow_requests_total`, `undertow_responses_4xx_total`, `undertow_responses_5xx_total`
+  - `undertow_tokens_generated_total`, `undertow_generations_cancelled_total`, `undertow_generations_timed_out_total`, `undertow_queue_rejections_total`
+  - `undertow_expert_store_hits_total`, `undertow_expert_store_misses_total`, `undertow_expert_store_bytes_read_total`
+  - `undertow_prefetch_issued_total`, `undertow_prefetch_dropped_total`
+  - `undertow_expert_evictions_total`: Expert weights evicted under memory pressure.
+- **Histogram**:
+  - `undertow_disk_read_duration_seconds`: Latency of synchronous `pread` expert fetch calls (`_bucket`, `_sum`, `_count`).
+

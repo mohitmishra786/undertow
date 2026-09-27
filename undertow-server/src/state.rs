@@ -48,6 +48,7 @@ pub struct Metrics {
     pub queue_rejections_total: AtomicU64,
     pub inflight: AtomicU64,
     pub queued: AtomicU64,
+    pub tokens_per_second_bits: AtomicU64,
 }
 
 pub struct ServerState {
@@ -189,6 +190,7 @@ pub fn generate_blocking(
     deadline: std::time::Instant,
     mut on_text: impl FnMut(&str) -> bool,
 ) -> undertow_core::Result<(usize, Finish)> {
+    let t0 = std::time::Instant::now();
     let mut sampler = Sampler::new(req.sampling).map_err(EngineError::Other)?;
     let mut emitter = StopAwareEmitter::new(&state.tokenizer, req.stop_strings.clone());
     let stop_ids = state.model.stop_ids().to_vec();
@@ -223,6 +225,14 @@ pub fn generate_blocking(
             }
         },
     )?;
+    let elapsed = t0.elapsed().as_secs_f64();
+    if elapsed > 0.0 && produced > 0 {
+        let tps = produced as f64 / elapsed;
+        state
+            .metrics
+            .tokens_per_second_bits
+            .store(tps.to_bits(), Ordering::Relaxed);
+    }
     state
         .metrics
         .tokens_generated_total
@@ -289,16 +299,37 @@ pub fn render_metrics(state: &ServerState) -> String {
     let m = &state.metrics;
     let s = state.model.store_stats();
     let mut out = String::new();
-    let gauges: &[(&str, &str, u64)] = &[
+    let tps = f64::from_bits(m.tokens_per_second_bits.load(Ordering::Relaxed));
+    let gauges: &[(&str, &str, String)] = &[
         (
             "inflight",
             "generations running now",
-            m.inflight.load(Ordering::Relaxed),
+            m.inflight.load(Ordering::Relaxed).to_string(),
         ),
         (
             "queued",
             "requests waiting for the slot",
-            m.queued.load(Ordering::Relaxed),
+            m.queued.load(Ordering::Relaxed).to_string(),
+        ),
+        (
+            "tokens_per_second",
+            "instantaneous decode generation rate",
+            format!("{tps:.2}"),
+        ),
+        (
+            "expert_cache_hit_ratio",
+            "expert cache hit ratio",
+            format!("{:.4}", s.hit_rate()),
+        ),
+        (
+            "expert_cache_bytes_used",
+            "bytes held in expert cache",
+            s.bytes_used.to_string(),
+        ),
+        (
+            "expert_cache_budget_bytes",
+            "total allocated expert cache budget bytes",
+            s.budget_bytes.to_string(),
         ),
     ];
     for (name, help, v) in gauges {
@@ -359,11 +390,40 @@ pub fn render_metrics(state: &ServerState) -> String {
             "prefetch hints dropped",
             s.prefetch_dropped,
         ),
+        (
+            "expert_evictions_total",
+            "expert weights evicted under memory pressure",
+            s.evictions,
+        ),
     ];
     for (name, help, v) in counters {
         out.push_str(&format!(
             "# HELP undertow_{name} {help}\n# TYPE undertow_{name} counter\nundertow_{name} {v}\n"
         ));
     }
+
+    out.push_str(
+        "# HELP undertow_disk_read_duration_seconds latency of synchronous pread expert fetch calls\n\
+         # TYPE undertow_disk_read_duration_seconds histogram\n",
+    );
+    for (i, &le) in undertow_core::DISK_READ_LATENCY_BUCKETS.iter().enumerate() {
+        out.push_str(&format!(
+            "undertow_disk_read_duration_seconds_bucket{{le=\"{le}\"}} {}\n",
+            s.read_buckets[i]
+        ));
+    }
+    out.push_str(&format!(
+        "undertow_disk_read_duration_seconds_bucket{{le=\"+Inf\"}} {}\n",
+        s.read_count
+    ));
+    out.push_str(&format!(
+        "undertow_disk_read_duration_seconds_sum {:.6}\n",
+        s.read_duration_seconds
+    ));
+    out.push_str(&format!(
+        "undertow_disk_read_duration_seconds_count {}\n",
+        s.read_count
+    ));
+
     out
 }
