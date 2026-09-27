@@ -16,7 +16,7 @@ bench = false
 rayon.workspace = true
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "matmul"
