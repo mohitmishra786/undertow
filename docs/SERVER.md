@@ -18,11 +18,13 @@ undertow serve --model /models/some-moe-int4 --port 8080 \
 | GET | `/metrics` | Prometheus text: requests, tokens, cancellations, timeouts, queue rejections, expert-store hits/misses/bytes, prefetch counters, cache hit ratio, memory gauges, evictions, disk read latency histogram, and decode rate. |
 | GET | `/v1/models` | The loaded model. |
 | POST | `/v1/completions` | Raw text completion. |
-| POST | `/v1/chat/completions` | Chat; `"stream": true` for SSE. |
+| POST | `/v1/chat/completions` | Chat; `"stream": true` for SSE; supports `tools` and `tool_choice`. |
+| GET | `/api/tags` | Ollama model tags list shim. |
+| POST | `/api/chat` | Ollama chat completion shim (NDJSON stream or unary JSON). |
 
 Supported request fields: `messages` or `prompt`, `max_tokens` (alias
 `max_completion_tokens`), `temperature`, `top_p`, `seed`, `stop` (string
-or array), `stream`. Prompts longer than the context window are clamped
+or array), `stream`, `tools`, `tool_choice`. Prompts longer than the context window are clamped
 to their tail, OpenAI-style.
 
 ```sh
@@ -39,6 +41,21 @@ Streaming responses are `chat.completion.chunk` SSE events ending with
 `data: [DONE]`. Stop strings are held back until they either match (cut,
 never emitted) or cannot complete anymore (flushed), so clients never see
 a partial stop marker.
+
+### Tool & Function Calling
+
+Undertow supports structured tool / function calling via OpenAI `/v1/chat/completions` and Ollama `/api/chat`.
+Tool schemas provided in the `tools` array are passed to the chat template or injected into the prompt context.
+Tool calls produced by the model (formatted as `<tool_call>...</tool_call>`, ````tool_call...```` markdown blocks, or raw JSON objects) are automatically extracted:
+- In OpenAI chat responses, `finish_reason` is set to `"tool_calls"`, and the extracted calls are populated in `message.tool_calls` with generated `call_...` IDs.
+- In Ollama chat responses, `done_reason` is set to `"tool_calls"`, and the calls are populated in `message.tool_calls`.
+- Setting `"tool_choice": "none"` suppresses tool execution instructions.
+
+### Ollama Compatibility Shim
+
+Undertow provides first-class support for tooling and frontends built for Ollama (e.g. Continue, Open WebUI):
+- `GET /api/tags` returns the loaded model as both `<model>` and `<model>:latest`.
+- `POST /api/chat` accepts Ollama-format payloads (`model`, `messages`, `stream`, `options: {num_predict, temperature, top_p, seed, stop}`, `tools`) and streams line-delimited NDJSON responses (`application/x-ndjson`).
 
 ## Operational behavior
 

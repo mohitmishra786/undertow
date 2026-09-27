@@ -591,3 +591,158 @@ async fn model_validation_match_and_mismatch() {
         .unwrap();
     assert_eq!(res.status(), 200);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_completions_with_tools_and_tool_choice() {
+    let base = spawn_server().await;
+    let client = reqwest::Client::new();
+
+    let tools = serde_json::json!([{
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "Performs arithmetic calculations",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": { "type": "string" }
+                },
+                "required": ["expression"]
+            }
+        }
+    }]);
+
+    // 1. With tools
+    let res = client
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "oracle-tiny",
+            "messages": [{"role": "user", "content": "calculate 2+2"}],
+            "tools": tools,
+            "max_tokens": 8,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+
+    // 2. With tool_choice: "none"
+    let res = client
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "oracle-tiny",
+            "messages": [{"role": "user", "content": "calculate 2+2"}],
+            "tools": tools,
+            "tool_choice": "none",
+            "max_tokens": 8,
+            "temperature": 0,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ollama_tags_and_chat_endpoints() {
+    let base = spawn_server().await;
+    let client = reqwest::Client::new();
+
+    // 1. GET /api/tags
+    let tags_res = client.get(format!("{base}/api/tags")).send().await.unwrap();
+    assert_eq!(tags_res.status(), 200);
+    let tags: serde_json::Value = tags_res.json().await.unwrap();
+    let models = tags["models"].as_array().expect("models array");
+    assert!(!models.is_empty());
+    let names: Vec<&str> = models.iter().filter_map(|m| m["name"].as_str()).collect();
+    assert!(
+        names.contains(&"oracle-tiny") || names.contains(&"oracle-tiny:latest"),
+        "expected oracle-tiny in tags: {names:?}"
+    );
+
+    // 2. POST /api/chat unary (stream: false)
+    let unary_res = client
+        .post(format!("{base}/api/chat"))
+        .json(&serde_json::json!({
+            "model": "oracle-tiny",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": false,
+            "options": {
+                "num_predict": 6,
+                "temperature": 0,
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unary_res.status(), 200);
+    let unary: serde_json::Value = unary_res.json().await.unwrap();
+    assert_eq!(unary["model"], "oracle-tiny");
+    assert_eq!(unary["message"]["role"], "assistant");
+    assert_eq!(unary["done"], true);
+    assert!(unary["total_duration"].as_u64().is_some());
+    assert!(unary["prompt_eval_count"].as_u64().is_some());
+
+    // 3. POST /api/chat streaming (stream: true)
+    let stream_res = client
+        .post(format!("{base}/api/chat"))
+        .json(&serde_json::json!({
+            "model": "oracle-tiny:latest",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true,
+            "options": {
+                "num_predict": 4,
+                "temperature": 0,
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stream_res.status(), 200);
+    let ct = stream_res
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        ct.contains("application/x-ndjson"),
+        "expected ndjson, got {ct}"
+    );
+
+    let stream_text = stream_res.text().await.unwrap();
+    let lines: Vec<&str> = stream_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert!(!lines.is_empty());
+    let mut saw_done = false;
+    for line in lines {
+        let v: serde_json::Value = serde_json::from_str(line).expect("valid JSON line");
+        assert_eq!(v["model"], "oracle-tiny");
+        if v["done"].as_bool() == Some(true) {
+            saw_done = true;
+        }
+    }
+    assert!(
+        saw_done,
+        "stream must emit a terminal chunk with done: true"
+    );
+
+    // 4. POST /api/chat with mismatched model -> 400
+    let err_res = client
+        .post(format!("{base}/api/chat"))
+        .json(&serde_json::json!({
+            "model": "llama3:latest",
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(err_res.status(), 400);
+}

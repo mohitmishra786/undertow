@@ -31,6 +31,10 @@ Format follows keepachangelog.com; versions follow semver once published.
 - Extended Prometheus `/metrics` telemetry with cache hit ratio, RAM bytes used,
   cache budget, expert evictions total, synchronous pread latency histogram,
   and instantaneous decode generation rate.
+- Structured tool / function calling support (`tools`, `tool_choice`) with
+  automatic extraction of XML, markdown, and raw JSON tool calls in `undertow-server`.
+- Ollama API compatibility shim in `undertow-server` exposing `/api/tags` and
+  streaming/unary `/api/chat` (application/x-ndjson).
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`

@@ -13,10 +13,16 @@ use serde::Deserialize;
 use undertow_core::{EngineError, Result};
 
 /// One chat turn.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
 }
 
 impl ChatMessage {
@@ -24,6 +30,23 @@ impl ChatMessage {
         Self {
             role: role.into(),
             content: content.into(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    pub fn with_tool_calls(
+        role: impl Into<String>,
+        content: impl Into<String>,
+        tool_calls: serde_json::Value,
+    ) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(tool_calls),
         }
     }
 }
@@ -158,8 +181,25 @@ impl Tokenizer {
         messages: &[ChatMessage],
         add_generation_prompt: bool,
     ) -> Result<String> {
+        self.apply_chat_template_with_tools(messages, None, add_generation_prompt)
+    }
+
+    /// Render the model's chat template over `messages` with optional `tools`.
+    pub fn apply_chat_template_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[serde_json::Value]>,
+        add_generation_prompt: bool,
+    ) -> Result<String> {
         let Some(template) = &self.chat_template else {
             let mut out = String::new();
+            if let Some(t) = tools {
+                if !t.is_empty() {
+                    out.push_str("<|system|>\nAvailable Tools:\n");
+                    out.push_str(&serde_json::to_string(t).unwrap_or_default());
+                    out.push('\n');
+                }
+            }
             for m in messages {
                 out.push_str(&format!("<|{}|>\n{}\n", m.role, m.content));
             }
@@ -172,6 +212,7 @@ impl Tokenizer {
         let mut env = minijinja::Environment::new();
         env.set_trim_blocks(true);
         env.set_lstrip_blocks(true);
+        env.set_fuel(Some(1_000_000));
         // HF templates call raise_exception on unsupported inputs.
         env.add_function(
             "raise_exception",
@@ -187,6 +228,7 @@ impl Tokenizer {
         let tmpl = env.get_template("chat").expect("just added");
         tmpl.render(minijinja::context! {
             messages => messages,
+            tools => tools,
             add_generation_prompt => add_generation_prompt,
             bos_token => self.bos_token.clone().unwrap_or_default(),
             eos_token => self.eos_token.clone().unwrap_or_default(),
@@ -200,7 +242,17 @@ impl Tokenizer {
         messages: &[ChatMessage],
         add_generation_prompt: bool,
     ) -> Result<Vec<usize>> {
-        let text = self.apply_chat_template(messages, add_generation_prompt)?;
+        self.encode_chat_with_tools(messages, None, add_generation_prompt)
+    }
+
+    /// Encode a chat with optional tool definitions, ready for prefill.
+    pub fn encode_chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[serde_json::Value]>,
+        add_generation_prompt: bool,
+    ) -> Result<Vec<usize>> {
+        let text = self.apply_chat_template_with_tools(messages, tools, add_generation_prompt)?;
         // Templates place BOS themselves; honor add_bos only for the
         // template-less fallback.
         let add_special = !self.has_chat_template() && self.add_bos;
@@ -215,6 +267,25 @@ impl Tokenizer {
 pub fn render_chat_template(
     template: &str,
     messages: &[ChatMessage],
+    add_generation_prompt: bool,
+    bos_token: &str,
+    eos_token: &str,
+) -> Result<String> {
+    render_chat_template_with_tools(
+        template,
+        messages,
+        None,
+        add_generation_prompt,
+        bos_token,
+        eos_token,
+    )
+}
+
+/// Render a Jinja chat template with optional tool definitions.
+pub fn render_chat_template_with_tools(
+    template: &str,
+    messages: &[ChatMessage],
+    tools: Option<&[serde_json::Value]>,
     add_generation_prompt: bool,
     bos_token: &str,
     eos_token: &str,
@@ -239,6 +310,7 @@ pub fn render_chat_template(
     let tmpl = env.get_template("chat").expect("just added");
     tmpl.render(minijinja::context! {
         messages => messages,
+        tools => tools,
         add_generation_prompt => add_generation_prompt,
         bos_token => bos_token,
         eos_token => eos_token,
@@ -463,5 +535,21 @@ mod tests {
             Err(other) => panic!("wrong error kind: {other}"),
             Ok(_) => panic!("must fail on empty dir"),
         }
+    }
+
+    #[test]
+    fn render_template_with_tools() {
+        let template = "{% if tools %}[TOOLS]{% for t in tools %}{{ t.function.name }}{% endfor %}[/TOOLS]{% endif %}{% for m in messages %}<{{ m.role }}>{{ m.content }}</{{ m.role }}>{% endfor %}";
+        let msgs = vec![ChatMessage::new("user", "what is 2+2?")];
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": { "name": "calculator" }
+        })];
+
+        let text =
+            render_chat_template_with_tools(template, &msgs, Some(&tools), true, "<s>", "</s>")
+                .unwrap();
+        assert!(text.contains("[TOOLS]calculator[/TOOLS]"));
+        assert!(text.contains("<user>what is 2+2?</user>"));
     }
 }

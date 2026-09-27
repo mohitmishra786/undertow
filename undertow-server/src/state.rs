@@ -273,6 +273,17 @@ pub fn chat_prompt_ids(
     state.tokenizer.encode_chat(messages, true)
 }
 
+/// Render a chat with optional tool definitions into prompt ids.
+pub fn chat_prompt_ids_with_tools(
+    state: &ServerState,
+    messages: &[ChatMessage],
+    tools: Option<&[serde_json::Value]>,
+) -> undertow_core::Result<Vec<usize>> {
+    state
+        .tokenizer
+        .encode_chat_with_tools(messages, tools, true)
+}
+
 /// Acquire the generation slot respecting the queue bound. `None` means
 /// the queue is full (429).
 pub async fn acquire_slot(state: &Arc<ServerState>) -> Option<tokio::sync::SemaphorePermit<'_>> {
