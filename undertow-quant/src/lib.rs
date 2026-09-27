@@ -19,7 +19,10 @@ mod kernels;
 mod neon;
 
 #[cfg(all(target_arch = "x86_64", not(miri)))]
-mod avx2;
+pub mod avx2;
+
+#[cfg(all(target_arch = "x86_64", not(miri)))]
+pub mod avx512;
 
 mod qtensor;
 

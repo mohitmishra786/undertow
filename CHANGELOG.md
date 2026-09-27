@@ -13,6 +13,9 @@ Format follows keepachangelog.com; versions follow semver once published.
   integer accumulation on NEON.
 - AVX2 kernels for x86_64 with runtime detection, parity-tested against
   the scalar reference.
+- AVX-512 FMA, VNNI (`VPDPBUSD`), and Intel AMX matrix kernels in `undertow-quant`
+  with runtime CPUID detection, accelerating 512-bit vector matmuls and INT8 matrix
+  multiplications on modern x86_64 architectures (Zen 4/5, Sapphire/Emerald/Granite Rapids).
 - Criterion micro-benchmarks and a scheduled benchmark workflow.
 - Server hardening: per-request deadlines, bounded queue with 429,
   client-disconnect cancellation, graceful shutdown, optional bearer
