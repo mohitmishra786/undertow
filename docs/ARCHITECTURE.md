@@ -72,4 +72,4 @@ To prevent the OS buffer cache from duplicating or polluting RAM during large ge
 
 ## What is next
 
-Full-size model benchmarks on real NVMe (the only item on this list blocked on hardware rather than code), AVX-512 and Intel AMX matrix extensions for high-end x86 workstations, and the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start.
+Full-size model benchmarks (DeepSeek-V3 671B and Qwen3-MoE-235B) are measured and published in [docs/BENCHMARKS.md](BENCHMARKS.md), and AVX-512 / Intel AMX matrix extensions are shipped in `undertow-quant`. What remains next on the systems roadmap is the distributed LAN-pooled store the `TieredStore` boundary was shaped for from the start, peer-to-peer expert sharding across local workstation clusters, and asynchronous `io_uring` kernel submission queues on Linux.

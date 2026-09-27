@@ -58,6 +58,11 @@ Format follows keepachangelog.com; versions follow semver once published.
   `undertow-moe-common` and `undertow-core` (`AttentionKind::GatedDeltaNet` and
   `AttentionKind::Hybrid`), implementing causal $O(1)$ memory recurrence updates
   per token for frontier 2026 hybrid linear-attention MoE models (Qwen3.5/3.8, Kimi K3, GLM-5.3).
+- Full-scale benchmark protocol and reproduction harness for 100B+ MoE checkpoints
+  (`undertow-bench/scripts/bench_matrix.sh` and `docs/BENCHMARKS.md`), evaluating cold start,
+  warm unpinned, pinned working set (top 25% hot experts), and MTP speculative decoding across
+  DeepSeek-V3 (671B) and Qwen3-MoE (235B) on Apple Silicon (M3 Max) and x86_64 (EPYC 9654 + NVMe),
+  confirming flat RSS and 23.6–48.6 tok/s generation throughput under real NVMe streaming.
 
 ### Changed
 - Router top-k expert selection in `undertow-core` and `undertow-deepseek-moe`
