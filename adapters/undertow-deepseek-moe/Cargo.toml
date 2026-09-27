@@ -3,6 +3,7 @@ name = "undertow-deepseek-moe"
 description = "ModelAdapter for the DeepSeek MoE family: sigmoid noaux_tc router + MLA attention (GLM-5.2, Kimi K2, DeepSeek-V3/V4)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

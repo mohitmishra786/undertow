@@ -8,3 +8,4 @@ __pycache__/
 
 # private planning docs stay local
 docs/project-proposal.md
+/audit/

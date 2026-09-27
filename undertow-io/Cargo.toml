@@ -3,6 +3,7 @@ name = "undertow-io"
 description = "safetensors shard reader (pread, no mmap) and writer"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

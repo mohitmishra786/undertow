@@ -3,6 +3,7 @@ name = "undertow-mixtral-moe"
 description = "ModelAdapter for the Mixtral family: softmax top-k router + GQA attention"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

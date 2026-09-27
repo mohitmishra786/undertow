@@ -3,6 +3,7 @@ name = "undertow-qwen-moe"
 description = "ModelAdapter for the Qwen3-MoE family: softmax router, GQA with per-head q/k norms"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

@@ -42,4 +42,4 @@ seconds. No model download needed; the oracle fixtures ship in the repo.
 
 ## License
 
-Apache-2.0
+MIT

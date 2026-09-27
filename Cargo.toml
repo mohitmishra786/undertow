@@ -21,9 +21,9 @@ version = "0.1.0"
 # Path-only internal deps; publishing needs explicit versioning first.
 publish = false
 edition = "2021"
-# usize::is_multiple_of stabilized in 1.87; CI checks this floor.
-rust-version = "1.87"
-license = "Apache-2.0"
+# slice::as_chunks stabilized in 1.88; CI checks this floor.
+rust-version = "1.88"
+license = "MIT"
 repository = "https://github.com/mohitmishra786/undertow"
 authors = ["Mohit Mishra <immadmohit@gmail.com>"]
 
