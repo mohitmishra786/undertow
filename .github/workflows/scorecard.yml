@@ -5,6 +5,7 @@ on:
     branches: [main]
   schedule:
     - cron: "44 7 * * 2"
+  workflow_dispatch:
 
 permissions: read-all
 

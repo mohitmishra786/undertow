@@ -1,6 +1,6 @@
 name: Benchmarks
 
-# Manual and weekly only: benchmark numbers from shared runners are too
+# Manual and weekly: benchmark numbers from shared runners are too
 # noisy to gate PRs, but the artifact trail catches large regressions.
 on:
   workflow_dispatch:

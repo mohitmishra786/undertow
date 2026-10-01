@@ -13,5 +13,4 @@ publish.workspace = true
 undertow-core.workspace = true
 undertow-quant.workspace = true
 undertow-io.workspace = true
-serde_json.workspace = true
 rayon.workspace = true
