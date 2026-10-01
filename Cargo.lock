@@ -2431,10 +2431,8 @@ name = "undertow-io"
 version = "0.1.0"
 dependencies = [
  "half",
- "serde",
  "serde_json",
  "tempfile",
- "thiserror",
  "undertow-core",
 ]
 
@@ -2454,7 +2452,6 @@ name = "undertow-moe-common"
 version = "0.1.0"
 dependencies = [
  "rayon",
- "serde_json",
  "undertow-core",
  "undertow-io",
  "undertow-quant",
