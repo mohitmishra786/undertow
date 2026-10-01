@@ -1,11 +1,12 @@
 version: 2
 updates:
+  # Monthly and grouped on purpose: every dependabot PR triggers the CI
+  # matrix, so weekly updates burn a large share of the Actions budget.
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 10
+      interval: monthly
+    open-pull-requests-limit: 5
     groups:
       cargo:
         patterns: ["*"]
@@ -14,8 +15,7 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
     groups:
       actions:
         patterns: ["*"]

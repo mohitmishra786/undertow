@@ -4,9 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Cancel superseded runs on the same PR so rapid pushes don't burn minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +21,7 @@ jobs:
   lint:
     name: Format, docs, typos
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,18 +47,30 @@ jobs:
       matrix:
         include:
           # x86_64 Linux: the scalar kernel path, most common server target.
+          # Runs on every PR (1x minute cost).
           - name: linux-x64
             os: ubuntu-latest
+            pr: true
           # aarch64 Linux: exercises the NEON kernels off-Apple.
+          # Runs on every PR (1x minute cost).
           - name: linux-arm64
             os: ubuntu-24.04-arm
-          # Apple Silicon: primary dev target, NEON + unified memory.
+            pr: true
+          # Apple Silicon: NEON + unified memory. Merge-only: macOS runners
+          # bill at a 10x multiplier.
           - name: macos-arm64
             os: macos-latest
+            pr: false
           # Windows: the pread fallback (seek_read) and path handling.
+          # Merge-only: Windows runners bill at a 2x multiplier.
           - name: windows-x64
             os: windows-latest
+            pr: false
+    # PRs get the cheap Linux matrix; the full matrix runs on merges to
+    # main and manual dispatches.
+    if: github.event_name != 'pull_request' || matrix.pr
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,6 +90,7 @@ jobs:
   msrv:
     name: MSRV (1.88)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,7 +104,10 @@ jobs:
 
   miri:
     name: Miri (kernel soundness)
+    # Merge/dispatch only: slow nightly job, not needed to gate every PR.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,7 +126,10 @@ jobs:
 
   coverage:
     name: Coverage
+    # Merge/dispatch only: the lcov artifact is consumed after merge, not per PR.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

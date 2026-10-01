@@ -15,8 +15,9 @@ on:
       - "deny.toml"
       - ".github/workflows/security.yml"
   schedule:
-    # Daily: new RUSTSEC advisories should fail fast, not at the next PR.
-    - cron: "17 4 * * *"
+    # Weekly: new RUSTSEC advisories are also caught by cargo-deny on
+    # every dependency-touching PR and push.
+    - cron: "17 4 * * 1"
 
 permissions:
   contents: read
@@ -25,6 +26,7 @@ jobs:
   cargo-deny:
     name: cargo-deny (advisories, licenses, bans, sources)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,16 +35,3 @@ jobs:
         with:
           command: check
           rust-version: stable
-
-  cargo-audit:
-    name: cargo-audit (RUSTSEC)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2
-        with:
-          tool: cargo-audit
-      - name: Audit lockfile
-        run: cargo audit --deny warnings
