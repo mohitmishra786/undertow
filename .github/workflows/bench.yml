@@ -1,10 +1,11 @@
 name: Benchmarks
 
-# Manual only: benchmark numbers from shared runners are too noisy to gate
-# PRs, and the weekly schedule burned a large share of the Actions minutes
-# (macOS runners bill at a 10x multiplier). Run it on demand when needed.
+# Manual and weekly: benchmark numbers from shared runners are too
+# noisy to gate PRs, but the artifact trail catches large regressions.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 3"
 
 permissions:
   contents: read

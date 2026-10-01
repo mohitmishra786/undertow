@@ -1,10 +1,11 @@
 name: Fuzz
 
-# On demand only: three minutes per target catches shallow parser panics;
-# long campaigns run manually when parsers change. The weekly smoke run
-# was failing more often than not, so it is stopped until needed.
+# Weekly smoke plus on demand: three minutes per target catches shallow
+# parser panics; long campaigns run manually when parsers change.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "9 3 * * 0"
 
 permissions:
   contents: read
